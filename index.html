@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Collection Jeux Vidéo – Fazerbleu</title>
+  <meta name="theme-color" content="#12151d">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="images/icon-192.png">
+  <link rel="icon" href="images/icon-192.png">
+  <script>try{var t=localStorage.getItem('fazerbleu-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="menuBtn" class="icon-btn" aria-label="Menu">☰</button>
+    <h1>🎮 Collection <span>Fazerbleu</span><img class="brandgif" src="images/sonic.gif" alt="" onerror="this.remove()"></h1>
+    <input id="globalSearch" type="search" placeholder="Rechercher partout (titre, notes, magasin…)">
+    <div class="topbtns"><button id="themeBtn" class="icon-btn" aria-label="Changer de thème">☀️</button><button class="btn small" data-act="new-console">＋<span class="lbl"> Nouvelle console</span><span class="ico">🕹</span></button><button class="btn small primary" data-act="new-game">＋<span class="lbl"> Nouveau jeu</span><span class="ico">🎮</span></button></div>
+  </header>
+
+  <nav id="sidebar" class="sidebar"></nav>
+  <main id="app"></main>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <div class="modal-head"><h2 id="modalTitle"></h2><button class="icon-btn" id="modalClose" aria-label="Fermer">✕</button></div>
+      <form id="modalForm"></form>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="data.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
