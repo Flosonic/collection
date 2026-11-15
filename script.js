@@ -1,5 +1,5 @@
 /* =====================================================================
-   Collection Jeux Vidéo – Fazerbleu   (V8)
+   Collection Jeux Vidéo – Fazerbleu   (V9)
    Application 100 % navigateur (HTML + CSS + JavaScript vanilla).
    Les données de départ sont dans data.js (INITIAL_DATA).
    Tes modifications sont enregistrées dans le navigateur (IndexedDB, avec repli sur localStorage).
@@ -124,10 +124,14 @@
     Object.values(d.wishlists).forEach((l) => l.forEach((w) => { if (!w.id) w.id = uid(); }));
     d.commandes.forEach((x) => { if (!x.id) x.id = uid(); });
     d.presets = d.presets || []; d.lastBackup = d.lastBackup || 0; d.modified = d.modified || 0;
-    d.orderMode = d.orderMode || 'auto'; d.logoStyle = d.logoStyle || 'auto';
+    d.orderMode = d.orderMode || 'auto'; if (d.logoStyle !== 'white' && d.logoStyle !== 'black') d.logoStyle = 'white';
+    const DEFAULT_WISH = { general: 'Générale', sonic: 'Sonic Full FR', zelda: 'Zelda' };
+    d.wishNames = d.wishNames || {};
+    Object.keys(d.wishlists).forEach((k) => { if (!d.wishNames[k]) d.wishNames[k] = DEFAULT_WISH[k] || 'Ma liste'; });
     if (!d.brandOrder) d.brandOrder = [...new Set(d.consoles.map((c) => c.marque))];
     d.consoles.forEach((c) => {
       const m = CONSOLE_META[c.id] || guessMeta(c.nom);
+      if (c.logoBgMode !== 'white' && c.logoBgMode !== 'black') c.logoBgMode = (c.logoTone === 'black' || c.id === 'saturn') ? 'black' : '';
       if (!c.type) c.type = m.type;
       if (c.annee === undefined || c.annee === null || c.annee === '') c.annee = m.annee || '';
     });
@@ -230,7 +234,7 @@
   const rowClass = (g) => (g.special ? ' is-special' : '') + (g.platine ? ' is-platine' : '');
 
   /* ---------- 3. État de l'interface ---------- */
-  const S = { print: { what: 'collection', compact: true }, mode: 'table', wishMode: 'table', filters: {}, sort: {}, tab: {} };
+  const S = { print: { what: 'collection', compact: true }, mode: 'table', wishMode: 'table', filters: {}, sort: {}, tab: {}, fold: {}, dom: {} };
   const BRAND_COLORS = { Nintendo: '#e4372c', SEGA: '#7d8494', PlayStation: '#2f7bff', Xbox: '#2faa3f' };
   const brandColor = (b) => BRAND_COLORS[b] || '#8e6bd8';
   const brandList = () => {
@@ -243,16 +247,10 @@
     return DB.orderMode === 'manuel' ? l : l.slice().sort((x, y) => (x.type === 'portable') - (y.type === 'portable') || (Number(x.annee) || 9999) - (Number(y.annee) || 9999));
   };
   const orderedConsoles = () => [].concat(...brandList().map(consolesOf));
-  const BRAND_BG = { Nintendo: '#d6261b', SEGA: '#14161d', PlayStation: '#1f54d6', Xbox: '#107c10' };
-  const LOGO_BGS = { white: '#ffffff', black: '#14161d', grey: '#4a4f5e' };
+  const LOGO_BGS = { white: '#ffffff', black: '#0f1117' }; /* le noir = couleur du fond du site */
   const isSwitch2 = (c) => /switch\s*2/i.test(c.nom);
   const isDemat = (g) => g.support === 'Démat';
-  function logoBg(c) {
-    const m = c.logoBgMode || 'auto';
-    if (LOGO_BGS[m]) return LOGO_BGS[m];
-    if (m === 'brand' || (m === 'auto' && DB.logoStyle === 'brand')) return BRAND_BG[c.marque] || '#3a3f55';
-    return LOGO_BGS[c.logoTone || (c.id === 'saturn' ? 'black' : 'white')];
-  }
+  function logoBg(c) { return LOGO_BGS[c.logoBgMode] || LOGO_BGS[DB.logoStyle] || LOGO_BGS.white; }
   const tabOf = (c) => S.tab[c.id] || (c.games.some((g) => !isDemat(g)) || !c.games.some(isDemat) ? 'phys' : 'demat');
   const consoleById = (id) => DB.consoles.find((c) => c.id === id);
   const route = () => (location.hash || '#/dashboard').slice(2).split('/');
@@ -262,7 +260,7 @@
     const [view, id] = route();
     const a = (href, label, count, active) =>
       '<a href="' + href + '" class="' + (active ? 'active' : '') + '"><span>' + label + '</span>' + (count != null ? '<small>' + count + '</small>' : '') + '</a>';
-    let h = '<h3>Tableau de bord</h3>' + a('#/dashboard', '📊 Vue d\'ensemble', null, view === 'dashboard') + a('#/stats', '📈 Statistiques', null, view === 'stats') + (READONLY ? '' : a('#/check', '🔎 Brocante', null, view === 'check'));
+    let h = '<h3>Tableau de bord</h3>' + a('#/dashboard', '📊 Vue d\'ensemble', null, view === 'dashboard') + a('#/stats', '📈 Statistiques', null, view === 'stats') + a('#/check', '🔎 Brocante', null, view === 'check') + (READONLY ? '' : (() => { const n = DB.consoles.reduce((x, c) => x + c.games.filter((g) => !g.nom).length, 0); return n ? a('#/titles', '✏️ Compléter les titres', n, view === 'titles') : ''; })());
     h += '<h3>Ma collection</h3>';
     brandList().forEach((b) => {
       h += '<div class="navbrand">' + esc(b) + '</div>';
@@ -275,9 +273,10 @@
     });
     if (!READONLY || Object.keys(DB.wishlists).some((k) => DB.wishlists[k].length)) {
       h += '<h3>Wishlist</h3>';
-      [['general', 'Générale'], ['sonic', 'Sonic Full FR'], ['zelda', 'Zelda']].forEach(([k, l]) => {
-        if (!READONLY || DB.wishlists[k].length) h += a('#/wish/' + k, l, DB.wishlists[k].length, view === 'wish' && id === k);
+      Object.keys(DB.wishlists).forEach((k) => {
+        if (!READONLY || DB.wishlists[k].length) h += a('#/wish/' + k, esc(wishName(k)), DB.wishlists[k].length, view === 'wish' && id === k);
       });
+      if (!READONLY) h += '<button class="navnew" data-act="new-wishlist">Nouvelle wishlist</button>';
     }
     if (!READONLY) {
       h += '<h3>Commandes</h3>' + a('#/orders', '📦 Précommandes & commandes', DB.commandes.length, view === 'orders');
@@ -292,7 +291,7 @@
     renderNav();
     const [view, id, gid] = route();
     const app = $('#app');
-    if (READONLY && ['settings', 'orders', 'print', 'check'].indexOf(view) >= 0) { location.hash = '#/dashboard'; return; }
+    if (READONLY && ['settings', 'orders', 'print', 'titles'].indexOf(view) >= 0) { location.hash = '#/dashboard'; return; }
     if (view === 'game' && !(consoleById(id) && consoleById(id).games.some((g) => g.id === gid))) { location.hash = consoleById(id) ? '#/console/' + id : '#/dashboard'; return; }
     if (view === 'console' && consoleById(id)) app.innerHTML = consoleView(consoleById(id));
     else if (view === 'wish' && DB.wishlists[id]) app.innerHTML = wishView(id);
@@ -300,6 +299,7 @@
     else if (view === 'settings') app.innerHTML = settingsView();
     else if (view === 'stats') app.innerHTML = statsView();
     else if (view === 'print') app.innerHTML = printView();
+    else if (view === 'titles') app.innerHTML = titlesView();
     else if (view === 'check') app.innerHTML = checkView();
     else if (view === 'game') app.innerHTML = vitrineView(id, gid);
     else app.innerHTML = dashboardView();
@@ -307,6 +307,8 @@
     if (view === 'wish') paintWish();
     if (view === 'orders') paintOrders();
     if (view === 'check') { paintCheck(); }
+    if (view === 'settings') foldSettings();
+    initMarquee();
     window.scrollTo(0, 0);
   }
 
@@ -323,7 +325,10 @@
     recent.sort((a, b) => b.g.ajoute - a.g.ajoute);
 
     let h = '<h2 class="page">Vue d\'ensemble</h2><p class="sub">' + DB.consoles.length + ' consoles · ' + sum((k) => k.total) + ' jeux</p>';
-    if (missing && !READONLY) h += '<div class="notice">⚠️ <b>' + missing + ' jeux n\'ont pas encore de titre.</b> Ouvre un jeu puis « Modifier » pour renseigner son nom.</div>';
+    if (missing && !READONLY) h += '<div class="notice">⚠️ <b>' + missing + ' jeux n\'ont pas encore de titre.</b> <a class="btn small primary" href="#/titles" style="margin-left:8px">✏️ Compléter les titres</a></div>';
+    const dg = READONLY ? [] : dupGroups();
+    if (dg.length) h += '<details class="notice dupes"><summary>🔁 <b>' + dg.length + ' doublon' + (dg.length > 1 ? 's' : '') + ' possible' + (dg.length > 1 ? 's' : '') + '</b> (même titre et même version dans une console). Utilise plutôt la quantité.</summary><ul>' +
+      dg.slice(0, 30).map(({ c, l }) => '<li><a href="#/console/' + c.id + '">' + esc(c.nom) + '</a> · ' + esc(l[0].nom) + (l[0].version ? ' <span class="muted">(' + esc(l[0].version) + ')</span>' : '') + ' : ' + l.length + ' lignes</li>').join('') + '</ul></details>';
 
     /* Rappel de sauvegarde + espace de stockage */
     const bd = DB.lastBackup ? Math.floor((Date.now() - DB.lastBackup) / 86400000) : null, up = usage() / QUOTA * 100;
@@ -335,8 +340,9 @@
     const covers = [];
     DB.consoles.forEach((c) => c.games.forEach((g) => { if (g.image) covers.push({ c, g }); }));
     if (covers.length) {
-      const items = covers.map((x) => '<a href="#/console/' + x.c.id + '" data-act="view-game" data-c="' + x.c.id + '" data-id="' + x.g.id + '" title="' + esc(x.g.nom) + '"><img src="' + esc(x.g.image) + '" alt="' + esc(x.g.nom) + '" loading="lazy"></a>').join('');
-      h += '<div class="marquee" style="--d:' + Math.max(40, covers.length * 3) + 's"><div class="marquee-track">' + items + items + '</div></div>';
+      const pick = covers.slice().sort(() => Math.random() - 0.5).slice(0, 30);
+      const items = pick.map((x) => '<a draggable="false" href="#/console/' + x.c.id + '" data-act="view-game" data-c="' + x.c.id + '" data-id="' + x.g.id + '" title="' + esc(x.g.nom) + '"><img src="' + esc(x.g.image) + '" alt="' + esc(x.g.nom) + '" decoding="async" draggable="false"></a>').join('');
+      h += '<div class="marquee"><div class="marquee-track">' + items + items + '</div></div>';
     }
 
     h += '<div class="grid stats">' +
@@ -416,14 +422,17 @@
       sel('statut', ['Complet', 'Loose', 'Notice manquante', 'Démat'], F.statut, 'Tous statuts') +
       (licences.length ? sel('licence', licences, F.licence, 'Toutes licences') : '') +
       '<select data-f="flag"><option value="">Tous les jeux</option><option value="special"' + (F.flag === 'special' ? ' selected' : '') + '>⭐ Éditions spéciales</option><option value="platine"' + (F.flag === 'platine' ? ' selected' : '') + '>🏆 Terminés à 100 %</option><option value="non"' + (F.flag === 'non' ? ' selected' : '') + '>Pas encore à 100 %</option><option value="old"' + (F.flag === 'old' ? ' selected' : '') + '>⏳ Estimation ancienne</option></select>' +
-      '<span class="spacer"></span><div class="seg"><button data-act="mode" data-m="table" class="' + (S.mode === 'table' ? 'on' : '') + '">Tableau</button><button data-act="mode" data-m="cards" class="' + (S.mode === 'cards' ? 'on' : '') + '">Cartes</button><button data-act="mode" data-m="wall" class="' + (S.mode === 'wall' ? 'on' : '') + '">Vitrine</button></div>' +
+      '<span class="spacer"></span><div class="seg"><button data-act="mode" data-m="table" class="' + (S.mode === 'table' ? 'on' : '') + '">Tableau</button><button data-act="mode" data-m="cards" class="' + (S.mode === 'cards' ? 'on' : '') + '">Cartes</button><button data-act="mode" data-m="wall" class="' + (S.mode === 'wall' ? 'on' : '') + '">Vitrine</button><button data-act="mode" data-m="spine" class="' + (S.mode === 'spine' ? 'on' : '') + '">Tranches</button></div>' +
       '<button class="btn primary" data-act="add-game" data-id="' + c.id + '">+ Ajouter un jeu</button></div>';
     const BUILTIN = [['Tous', {}], ['Loose', { statut: 'Loose' }], ['Notice manquante', { statut: 'Notice manquante' }], ['⭐ Collectors', { flag: 'special' }], ['🏆 Platine', { flag: 'platine' }], ['⏳ Estimations anciennes', { flag: 'old' }]];
     const full = (f) => Object.assign({ q: '', statut: '', licence: '', flag: '' }, f);
     const same = (f) => { const x = full(f); return ['q', 'statut', 'licence', 'flag'].every((k) => (F[k] || '') === x[k]); };
-    h += '<div class="chips">' + BUILTIN.map((p, i) => '<button class="chip' + (same(p[1]) ? ' on' : '') + '" data-act="preset" data-i="' + i + '">' + p[0] + '</button>').join('') +
-      DB.presets.map((p) => '<span class="chip user' + (same(p.f) ? ' on' : '') + '"><button data-act="preset" data-pid="' + p.id + '">' + esc(p.nom) + '</button><button class="x" data-act="del-preset" data-pid="' + p.id + '" title="Supprimer ce filtre">✕</button></span>').join('') +
-      '<button class="chip add" data-act="save-preset">💾 Enregistrer ce filtre</button></div>';
+    const curB = BUILTIN.findIndex((p) => same(p[1])), curU = DB.presets.find((p) => same(p.f));
+    h += '<div class="toolbar presetbar"><label class="muted" for="presetSel">Filtres rapides</label><select id="presetSel">' +
+      (curB < 0 && !curU ? '<option value="" selected>Filtre personnalisé</option>' : '') +
+      '<optgroup label="Filtres rapides">' + BUILTIN.map((p, i) => '<option value="b' + i + '"' + (curB === i && !curU ? ' selected' : '') + '>' + p[0] + '</option>').join('') + '</optgroup>' +
+      (DB.presets.length ? '<optgroup label="Mes filtres">' + DB.presets.map((p) => '<option value="u' + p.id + '"' + (curU && curU.id === p.id ? ' selected' : '') + '>' + esc(p.nom) + '</option>').join('') + '</optgroup>' : '') +
+      '</select><button class="btn small" data-act="save-preset">Enregistrer ce filtre</button>' + (curU ? '<button class="btn small danger" data-act="del-preset" data-pid="' + curU.id + '">Supprimer « ' + esc(curU.nom) + ' »</button>' : '') + '</div>';
     h += '<div id="results"></div>';
     return h;
   }
@@ -458,6 +467,44 @@
   const gameTitle = (g) => g.nom ? esc(g.nom) : '<span class="muted">Titre à renseigner</span>';
   const gameIcons = (g) => (g.special ? ' <span class="ico gold" title="Édition spéciale">⭐</span>' : '') + (g.platine ? ' <span class="ico plat" title="Terminé à 100 %">🏆</span>' : '') + (g.gamekey ? ' <span class="ico key" title="Game-Key Card : la cartouche ne contient que la clé de téléchargement">🔑</span>' : '');
 
+  /* Vue « Tranches » : les jeux vus de dos, rangés sur une étagère. La couleur de chaque tranche vient de la jaquette. */
+  const strHash = (t) => { let h = 0; String(t).split('').forEach((ch) => { h = (h * 31 + ch.charCodeAt(0)) | 0; }); return Math.abs(h); };
+  function spineHtml(c, g) {
+    const hh = strHash(g.id + (g.nom || '')), w = 30 + (hh % 9), ht = 196 + ((hh >> 3) % 22);
+    return '<div class="sp-cell"><a class="spine' + rowClass(g) + '" href="#/game/' + c.id + '/' + g.id + '" title="' + esc(g.nom || 'Sans titre') + '" data-gid="' + g.id + '" data-src="' + esc(g.image || '') + '" style="width:' + w + 'px;height:' + ht + 'px;--sp:hsl(' + (hh % 360) + ',34%,30%)">' +
+      '<span class="sp-top" style="background:' + brandColor(c.marque) + '"></span><span class="sp-title">' + esc(g.nom || 'Sans titre') + '</span><span class="sp-ico">' + (g.platine ? '🏆' : g.special ? '⭐' : '') + '</span></a></div>';
+  }
+  function domColor(key, src, cb) {
+    if (S.dom[key]) return cb(S.dom[key]);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const cv = document.createElement('canvas'); cv.width = cv.height = 24;
+        const x = cv.getContext('2d'); x.drawImage(img, 0, 0, 24, 24);
+        const px = x.getImageData(0, 0, 24, 24).data; let r = 0, g = 0, b = 0, wt = 0;
+        for (let i = 0; i < px.length; i += 4) {
+          const R = px[i], G = px[i + 1], B = px[i + 2]; if (px[i + 3] < 128) continue;
+          const mx = Math.max(R, G, B), mn = Math.min(R, G, B), sat = mx ? (mx - mn) / mx : 0, w = 0.05 + sat * sat * (mx / 255) * 4;
+          r += R * w; g += G * w; b += B * w; wt += w;
+        }
+        if (!wt) return;
+        r /= wt; g /= wt; b /= wt;
+        const mx = Math.max(r, g, b) / 255, mn = Math.min(r, g, b) / 255; let h = 0, sat = 0, l = (mx + mn) / 2;
+        if (mx !== mn) {
+          const dd = mx - mn; sat = l > 0.5 ? dd / (2 - mx - mn) : dd / (mx + mn);
+          if (mx === r / 255) h = ((g - b) / 255 / dd + (g < b ? 6 : 0)); else if (mx === g / 255) h = ((b - r) / 255 / dd + 2); else h = ((r - g) / 255 / dd + 4);
+          h *= 60;
+        }
+        const col = 'hsl(' + Math.round(h) + ',' + Math.round(Math.max(30, Math.min(75, sat * 100))) + '%,' + Math.round(Math.max(22, Math.min(42, l * 100))) + '%)';
+        S.dom[key] = col; cb(col);
+      } catch (e) { /* image locale (file://) : on garde la couleur par défaut */ }
+    };
+    img.src = src;
+  }
+  function paintSpines() {
+    document.querySelectorAll('.spine[data-src]').forEach((el) => { const src = el.dataset.src; if (src) domColor(el.dataset.gid, src, (col) => el.style.setProperty('--sp', col)); });
+  }
+
   function paintConsole() {
     const c = consoleById(route()[1]); if (!c) return;
     const list = filteredGames(c), dm = tabOf(c) === 'demat';
@@ -466,7 +513,9 @@
     let h = '<p class="muted">' + list.length + ' lignes · ' + q + ' exemplaires' + (HIDE_PRICE ? '' : ' · valeur estimée ' + eur(v)) + '</p>';
     if (!list.length) { $('#results').innerHTML = h + '<div class="card">Aucun jeu ne correspond.</div>'; return; }
 
-    if (S.mode === 'wall') {
+    if (S.mode === 'spine') {
+      h += '<div class="shelf">' + list.map((g) => spineHtml(c, g)).join('') + '</div>';
+    } else if (S.mode === 'wall') {
       h += '<div class="wall">' + list.map((g) => '<a class="vit' + rowClass(g) + '" href="#/game/' + c.id + '/' + g.id + '" title="' + esc(g.nom || '') + '">' +
         (g.image ? '<img src="' + esc(g.image) + '" alt="' + esc(g.nom) + '">' : '<span class="vph">' + (g.nom ? esc(g.nom) : '🎮') + '</span>') +
         '<span class="vcap"><b>' + esc(g.nom || 'Sans titre') + '</b>' + (HIDE_PRICE ? '' : '<small>' + eur(g.prixEstime) + '</small>') + '</span></a>').join('') + '</div>';
@@ -495,17 +544,18 @@
       h += '</tbody></table></div>';
     }
     $('#results').innerHTML = h;
+    if (S.mode === 'spine') paintSpines();
   }
 
   /* ---------- 7. Wishlists ---------- */
+  const wishName = (k) => (DB.wishNames && DB.wishNames[k]) || k;
   function wishView(key) {
-    const names = { general: 'Wishlist générale', sonic: 'Wishlist Sonic – Full FR', zelda: 'Wishlist Zelda' };
     const l = DB.wishlists[key];
     const mn = l.reduce((s, w) => s + (w.prixMin || 0) * (w.quantite || 1), 0), mx = l.reduce((s, w) => s + (w.prixMax || 0) * (w.quantite || 1), 0);
-    return '<h2 class="page">' + names[key] + '</h2><p class="sub">' + l.length + ' jeux à acheter' + (HIDE_PRICE ? '' : ' · budget estimé ' + eur(mn) + ' à ' + eur(mx) + ' (lignes sans prix chiffré ignorées)') + '</p>' +
+    return '<div class="pagehead"><h2 class="page">Wishlist ' + esc(wishName(key)) + '</h2><div class="pageactions"><button class="btn small" data-act="rename-wishlist" data-k="' + key + '">✏️ Renommer</button><button class="btn small danger" data-act="del-wishlist" data-k="' + key + '">🗑 Supprimer la liste</button></div></div><p class="sub">' + l.length + ' jeux à acheter' + (HIDE_PRICE ? '' : ' · budget estimé ' + eur(mn) + ' à ' + eur(mx) + ' (lignes sans prix chiffré ignorées)') + '</p>' +
       '<div class="toolbar"><input id="wishQ" type="search" placeholder="Filtrer…">' +
       '<label class="muted"><input type="checkbox" id="wishPrio"> Prioritaires</label><label class="muted"><input type="checkbox" id="wishCol"> ⭐ Collectors</label><span class="spacer"></span>' +
-      '<div class="seg"><button data-act="wmode" data-m="table" class="' + (S.wishMode === 'table' ? 'on' : '') + '">Tableau</button><button data-act="wmode" data-m="cards" class="' + (S.wishMode === 'cards' ? 'on' : '') + '">Cartes</button></div>' +
+      '<div class="seg"><button data-act="wmode" data-m="table" class="' + (S.wishMode === 'table' ? 'on' : '') + '">Tableau</button><button data-act="wmode" data-m="cards" class="' + (S.wishMode === 'cards' ? 'on' : '') + '">Cartes</button><button data-act="wmode" data-m="wall" class="' + (S.wishMode === 'wall' ? 'on' : '') + '">Vitrine</button></div>' +
       '<button class="btn primary" data-act="add-wish" data-k="' + key + '">+ Ajouter</button></div><div id="results"></div>';
   }
   function paintWish() {
@@ -513,13 +563,17 @@
     const q = ($('#wishQ') || {}).value ? $('#wishQ').value.toLowerCase() : '';
     const prio = $('#wishPrio') && $('#wishPrio').checked, col = $('#wishCol') && $('#wishCol').checked;
     const list = l.filter((w) => (!q || JSON.stringify(w, (k, v) => (k === 'image' || k === 'imageEdition' ? undefined : v)).toLowerCase().includes(q)) && (!prio || w.priorite) && (!col || isCollector(w.collector)));
-    const groupOf = (w) => (w.section ? w.section + ' · ' : '') + (w.groupeLabel || 'Groupe ' + (w.groupe + 1));
+    const groupOf = (w) => (w.section ? w.section + ' · ' : '') + (w.groupeLabel || (w.groupe > 0 ? 'Groupe ' + (w.groupe + 1) : ''));
     let h, last = null;
-    if (S.wishMode === 'cards') {
+    if (S.wishMode === 'wall') {
+      h = '<div class="wall">' + list.map((w) => '<div class="vit' + (isCollector(w.collector) ? ' is-special' : '') + '" data-act="view-wish" data-k="' + key + '" data-id="' + w.id + '" title="' + esc(w.nom || '') + '" style="cursor:pointer">' +
+        (w.image ? '<img src="' + esc(w.image) + '" alt="' + esc(w.nom) + '">' : '<span class="vph">' + (w.nom ? esc(w.nom) : '🎁') + '</span>') +
+        '<span class="vcap"><b>' + esc(w.nom || 'Jeu à identifier') + '</b>' + (HIDE_PRICE || !w.prix ? '' : '<small>' + esc(w.prix) + '</small>') + '</span></div>').join('') + '</div>';
+    } else if (S.wishMode === 'cards') {
       h = '<div class="grid cards">';
       list.forEach((w) => {
         const g = groupOf(w);
-        if (g !== last) { last = g; h += '<div class="cardband">' + esc(g) + '</div>'; }
+        if (g !== last) { last = g; if (g) h += '<div class="cardband">' + esc(g) + '</div>'; }
         h += '<div class="game' + (isCollector(w.collector) ? ' is-special' : '') + '" data-act="view-wish" data-k="' + key + '" data-id="' + w.id + '">' +
           '<div class="gcover">' + (w.image ? '<img class="cv card" src="' + esc(w.image) + '" alt="" loading="lazy">' : '<span class="cv ph card">🎮</span>') + '</div>' +
           '<div class="gbody"><h4>' + (w.nom ? esc(w.nom) : '<span class="muted">Jeu à identifier</span>') + (isCollector(w.collector) ? ' <span class="ico gold">⭐</span>' : '') + '</h4>' +
@@ -533,7 +587,7 @@
       h = '<div class="tablewrap"><table><thead><tr><th>Jeu</th><th>Collector</th><th>Sortie</th><th>Version</th><th>Description</th><th>Estimation</th><th>Qté</th><th></th></tr></thead><tbody>';
       list.forEach((w) => {
         const g = groupOf(w);
-        if (g !== last) { last = g; h += '<tr class="band"><td colspan="8">' + esc(g) + '</td></tr>'; }
+        if (g !== last) { last = g; if (g) h += '<tr class="band"><td colspan="8">' + esc(g) + '</td></tr>'; }
         h += '<tr class="' + (isCollector(w.collector) ? 'is-special' : '') + '" data-act="view-wish" data-k="' + key + '" data-id="' + w.id + '" style="cursor:pointer"><td><div class="tcell">' + thumbs(w) + '<span class="title">' +
           (w.nom ? esc(w.nom) : '<span class="muted">Jeu à identifier</span>') + (isCollector(w.collector) ? ' <span class="ico gold">⭐</span>' : '') + '</span>' + (w.priorite ? ' <span class="pill e-mauvais">priorité</span>' : '') + '</div></td>' +
           '<td>' + pill(w.collector) + '</td><td>' + esc(w.date) + '</td><td>' + esc(w.version) + '</td><td>' + esc(w.description) + '</td><td>' + esc(w.prix) + '</td><td>' + w.quantite + '</td>' +
@@ -826,8 +880,8 @@
       { k: 'marque', label: 'Marque', type: 'choice', opt: 'marques' }, { k: 'support', label: 'Support des jeux', type: 'choice', opt: 'supports' },
       { k: 'type', label: 'Type de console', type: 'select', opts: ['salon', 'portable'], names: ['Console de salon', 'Console portable'] },
       { k: 'annee', label: 'Année de sortie (laisse vide : je la devine)', type: 'number' },
-      { k: 'logoBgMode', label: 'Fond du logo', type: 'select', opts: ['auto', 'brand', 'white', 'black', 'grey'], names: ['Automatique (adapté au logo)', 'Couleur de la marque', 'Blanc', 'Noir', 'Gris'] },
-      { k: 'logo', label: 'Logo de la console (optionnel)', type: 'image', wide: true }], c || { support: 'Cartouche', type: 'salon', logoBgMode: 'auto' }, (v) => {
+      { k: 'logoBgMode', label: 'Fond du logo', type: 'select', opts: ['', 'white', 'black'], names: ['Comme le réglage général', 'Blanc', 'Noir (couleur du fond du site)'] },
+      { k: 'logo', label: 'Logo de la console (optionnel)', type: 'image', wide: true }], c || { support: 'Cartouche', type: 'salon', logoBgMode: '' }, (v) => {
       v.nom = v.nom || 'Nouvelle console'; v.marque = v.marque || 'Autres'; v.support = v.support || 'Cartouche';
       const gm = guessMeta(v.nom);
       if (v.annee === '' || v.annee == null) { v.annee = gm.annee; if (!c) v.type = gm.type; }
@@ -837,7 +891,7 @@
         target = { id: 'c' + uid(), nom: v.nom, marque: v.marque, support: v.support, type: v.type, annee: v.annee, logo: v.logo, logoBgMode: v.logoBgMode, couleur: brandColor(v.marque), machines: [], games: [] };
         DB.consoles.push(target); c2 = target;
       }
-      if (target.logo && /^data:/.test(target.logo) && !target.logoTone) computeTone(target.logo, (t) => { target.logoTone = t; save(); renderNav(); refresh(); });
+      if (target.logo && /^data:/.test(target.logo) && !target.logoTone) computeTone(target.logo, (t) => { target.logoTone = t; if (!target.logoBgMode) target.logoBgMode = t; save(); renderNav(); refresh(); });
       save(); renderNav(); toast('Console enregistrée');
       if (!c) location.hash = '#/console/' + c2.id; else refresh();
     });
@@ -922,10 +976,9 @@
         else h += '<table class="ptable"><thead><tr><th>Jeu</th><th>Version</th><th>État</th><th>Qualité</th><th>Qté</th></tr></thead><tbody>' + gs.map((g) => '<tr><td>' + esc(g.nom) + (g.special ? ' ★' : '') + '</td><td>' + esc(g.version) + '</td><td>' + esc(statut(g)) + '</td><td>' + esc(g.qualite) + '</td><td>' + (g.quantite || 1) + '</td></tr>').join('') + '</tbody></table>';
       });
     } else {
-      const names = { general: 'Wishlist générale', sonic: 'Wishlist Sonic – Full FR', zelda: 'Wishlist Zelda' };
       Object.keys(DB.wishlists).forEach((k) => {
         const l = DB.wishlists[k].filter((w) => w.nom);
-        h += '<h3>' + names[k] + ' <small>(' + l.length + ')</small></h3><ul class="plist wl">' + l.map((w) => '<li>☐ ' + esc(w.nom) + (w.priorite ? ' <b>!</b>' : '') + (w.version ? ' <em>' + esc(w.version) + '</em>' : '') + (w.prix ? ' <span class="pp">' + esc(w.prix) + '</span>' : '') + '</li>').join('') + '</ul>';
+        h += '<h3>Wishlist ' + esc(wishName(k)) + ' <small>(' + l.length + ')</small></h3><ul class="plist wl">' + l.map((w) => '<li>☐ ' + esc(w.nom) + (w.priorite ? ' <b>!</b>' : '') + (w.version ? ' <em>' + esc(w.version) + '</em>' : '') + (w.prix ? ' <span class="pp">' + esc(w.prix) + '</span>' : '') + '</li>').join('') + '</ul>';
       });
     }
     return h + '</div>';
@@ -1032,9 +1085,9 @@
 
   function checkView() {
     const s = sync();
-    return '<h2 class="page">Brocante</h2><p class="sub">Tape un titre : je te dis si tu l\'as déjà, s\'il est dans tes wishlists ou déjà commandé.</p>' +
+    return '<h2 class="page">Brocante</h2><p class="sub">' + (READONLY ? 'Tape un titre : tu sauras tout de suite si Fazerbleu l\'a déjà (pratique avant d\'offrir un jeu !).' : 'Tape un titre : je te dis si tu l\'as déjà, s\'il est dans tes wishlists ou déjà commandé.') + '</p>' +
       '<input id="checkQ" class="bigsearch" type="search" placeholder="Titre du jeu…" autocomplete="off">' +
-      (s.token ? '<p><button class="btn small" data-act="sync-pull">⟳ Récupérer la dernière version (cloud)</button> <span class="muted" id="syncMsg">' + syncInfo() + '</span></p>'
+      (READONLY ? '' : s.token ? '<p><button class="btn small" data-act="sync-pull">⟳ Récupérer la dernière version (cloud)</button> <span class="muted" id="syncMsg">' + syncInfo() + '</span></p>'
         : '<p class="muted">Astuce : active la synchronisation dans « Paramètres » pour retrouver ta collection à jour sur ce téléphone.</p>') + '<div id="checkRes"></div>';
   }
   function paintCheck() {
@@ -1048,16 +1101,18 @@
     const orders = DB.commandes.filter(hit);
     const small = (x) => (x.image ? '<img class="cs" src="' + esc(x.image) + '" alt="">' : '<span class="cs ph">🎮</span>');
     let h = '';
-    if (mine.length) h += '<h3 class="ck ok">✅ Tu l\'as déjà (' + mine.length + ')</h3>' + mine.slice(0, 40).map(({ c, g }) =>
-      '<a class="ckrow' + rowClass(g) + '" href="#/game/' + c.id + '/' + g.id + '">' + small(g) + '<div><b>' + esc(g.nom) + '</b><div class="muted">' + esc(c.nom) + (g.version ? ' · ' + esc(g.version) : '') + '</div><div class="row">' + pill(statut(g)) + pill(g.qualite) + '<span class="pill">×' + (g.quantite || 1) + '</span></div></div><b class="ckp">' + eur(g.prixEstime) + '</b></a>').join('');
-    if (wish.length) h += '<h3 class="ck wish">⭐ Dans tes wishlists (' + wish.length + ')</h3>' + wish.slice(0, 40).map((w) =>
+    if (mine.length) h += '<h3 class="ck ok">✅ ' + (READONLY ? 'Fazerbleu l\'a déjà' : 'Tu l\'as déjà') + ' (' + mine.length + ')</h3>' + mine.slice(0, 40).map(({ c, g }) =>
+      '<a class="ckrow' + rowClass(g) + '" href="#/game/' + c.id + '/' + g.id + '">' + small(g) + '<div><b>' + esc(g.nom) + '</b><div class="muted">' + esc(c.nom) + (g.version ? ' · ' + esc(g.version) : '') + '</div><div class="row">' + pill(statut(g)) + pill(g.qualite) + '<span class="pill">×' + (g.quantite || 1) + '</span></div></div>' + (HIDE_PRICE ? '' : '<b class="ckp">' + eur(g.prixEstime) + '</b>') + '</a>').join('');
+    if (wish.length) h += '<h3 class="ck wish">⭐ ' + (READONLY ? 'Dans sa wishlist' : 'Dans tes wishlists') + ' (' + wish.length + ')</h3>' + wish.slice(0, 40).map((w) =>
       '<div class="ckrow">' + small(w) + '<div><b>' + esc(w.nom) + '</b>' + (w.priorite ? ' <span class="pill e-mauvais">priorité</span>' : '') + '<div class="muted">' + esc([w.version, w.description].filter(Boolean).join(' · ')) + '</div></div><b class="ckp">' + esc(w.prix || '') + '</b></div>').join('');
     if (orders.length) h += '<h3 class="ck">📦 Déjà commandé (' + orders.length + ')</h3>' + orders.map((o) => '<div class="ckrow">' + small(o) + '<div><b>' + esc(o.nom) + '</b><div class="muted">' + esc(o.site) + ' · ' + esc(o.statut) + '</div></div></div>').join('');
-    if (!mine.length) h = '<div class="ckno">' + (words.join('').length < 3 ? 'Continue à taper…' : '🆕 Pas dans ta collection') + '</div>' + h;
+    if (!mine.length) h = '<div class="ckno">' + (words.join('').length < 3 ? 'Continue à taper…' : (READONLY ? '🆕 Pas dans sa collection' : '🆕 Pas dans ta collection')) + '</div>' + h;
     out.innerHTML = h;
   }
 
   /* ---------- 9h. Synchronisation PC ↔ téléphone (Gist GitHub privé) ---------- */
+  let gistText = null, gistMeta = null;
+  const PREV_FILE = 'collection-fazerbleu.precedente.json';
   async function gh(path, opt) {
     const s = sync(); if (!s.token) throw new Error('Colle d\'abord ton jeton GitHub dans Paramètres.');
     const r = await fetch('https://api.github.com' + path, Object.assign({ headers: { Authorization: 'Bearer ' + s.token, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' } }, opt));
@@ -1071,18 +1126,20 @@
     if (g) setSync({ gistId: g.id });
     return g ? g.id : null;
   }
-  async function readGist(id) {
-    const g = await gh('/gists/' + id), f = g.files && g.files[SYNC_FILE];
+  async function readGist(id, file) {
+    const g = await gh('/gists/' + id), f = g.files && g.files[file || SYNC_FILE];
+    gistMeta = { at: g.updated_at };
     if (!f) throw new Error('Fichier de sauvegarde introuvable dans le cloud.');
     let text = f.content;
     if (f.truncated || text == null) { const r = await fetch(f.raw_url); if (!r.ok) throw new Error('Lecture impossible (' + r.status + ').'); text = await r.text(); }
+    gistText = text;
     return JSON.parse(text);
   }
   const syncMsg = (t) => { const m = $('#syncMsg'); if (m) m.textContent = t; };
   function syncSaveToken() { const i = $('#syncToken'); if (i) setSync({ token: i.value.trim() }); }
   async function cloudPush() {
     try {
-      syncSaveToken(); syncMsg('Envoi en cours…');
+      syncSaveToken(); syncMsg('Envoi en cours…'); gistText = null;
       const id = await findGist(), body = { description: 'Collection Fazerbleu (sauvegarde privée)', files: {} };
       if (id) {
         const remote = await readGist(id), s = sync();
@@ -1091,8 +1148,10 @@
         if (remote.modified && remote.modified !== s.lastRemote && !confirm('Le cloud contient des modifications faites depuis un autre appareil. Les écraser avec les données de cet appareil ?')) { syncMsg('Envoi annulé.'); return; }
       }
       body.files[SYNC_FILE] = { content: JSON.stringify(DB) };
-      if (id) await gh('/gists/' + id, { method: 'PATCH', body: JSON.stringify(body) });
-      else { body.public = false; const g = await gh('/gists', { method: 'POST', body: JSON.stringify(body) }); setSync({ gistId: g.id }); }
+      /* on garde au passage la version précédente du cloud (un seul niveau, pour ne pas alourdir l'envoi) */
+      if (id && gistText && gistText !== body.files[SYNC_FILE].content) body.files[PREV_FILE] = { content: gistText };
+      if (id) { const g = await gh('/gists/' + id, { method: 'PATCH', body: JSON.stringify(body) }); if (g && g.updated_at) setSync({ remoteAt: g.updated_at }); }
+      else { body.public = false; const g = await gh('/gists', { method: 'POST', body: JSON.stringify(body) }); setSync({ gistId: g.id, remoteAt: g.updated_at }); }
       setSync({ last: Date.now(), lastRemote: DB.modified }); syncMsg(syncInfo()); toast('Collection envoyée dans le cloud'); renderNav(); if (['dashboard', ''].indexOf(route()[0]) >= 0) router();
     } catch (e) { syncMsg(e.message); toast(e.message); }
   }
@@ -1102,17 +1161,29 @@
       const id = await findGist(); if (!id) throw new Error('Aucune sauvegarde trouvée : envoie d\'abord depuis ton ordinateur.');
       const d = await readGist(id);
       if (!d.consoles || !d.wishlists) throw new Error('Sauvegarde illisible.');
-      if (DB.consoles.some((c) => c.games.length) && !confirm('Remplacer les données de cet appareil par celles du cloud (' + d.consoles.reduce((n, c) => n + c.games.length, 0) + ' jeux) ?')) { syncMsg('Récupération annulée.'); return; }
-      DB = migrate(d); normalize(DB); lastSer = null; save(); setSync({ last: Date.now(), lastRemote: DB.modified });
-      router(); toast('Collection mise à jour depuis le cloud');
+      if (DB.consoles.some((c) => c.games.length) && !confirm((unsent() ? 'Attention : tu as des modifications non envoyées, elles seront perdues.\n\n' : '') + 'Remplacer les données de cet appareil par celles du cloud (' + d.consoles.reduce((n, c) => n + c.games.length, 0) + ' jeux) ?')) { syncMsg('Récupération annulée.'); return; }
+      DB = migrate(d); normalize(DB); lastSer = null; save(); setSync({ last: Date.now(), lastRemote: DB.modified, remoteAt: gistMeta && gistMeta.at });
+      renderNav(); router(); toast('Collection mise à jour depuis le cloud');
     } catch (e) { syncMsg(e.message); toast(e.message); }
+  }
+  async function cloudRestorePrev() {
+    try {
+      syncSaveToken(); syncMsg('Lecture de la version précédente…');
+      const id = await findGist(); if (!id) throw new Error('Aucune sauvegarde trouvée dans le cloud.');
+      const d = await readGist(id, PREV_FILE);
+      if (!d.consoles || !d.wishlists) throw new Error('Version précédente illisible.');
+      const n = d.consoles.reduce((x, c) => x + c.games.length, 0), when = d.modified ? new Date(d.modified).toLocaleString('fr-FR') : 'date inconnue';
+      if (!confirm('Remplacer les données de cet appareil par la version précédente du cloud (' + n + ' jeux, modifiée le ' + when + ') ?')) { syncMsg('Restauration annulée.'); return; }
+      DB = migrate(d); normalize(DB); lastSer = null; save(); DB.modified = Date.now(); persist();
+      renderNav(); router(); toast('Version précédente restaurée. Clique sur « Envoyer » pour la remettre aussi dans le cloud.');
+    } catch (e) { const m = /introuvable/.test(e.message) ? 'Pas encore de version précédente dans le cloud : elle apparaît à ton prochain envoi.' : e.message; syncMsg(m); toast(m); }
   }
   function syncCard() {
     const s = sync();
     return '<div class="card"><h3>📱 Synchronisation ordinateur ↔ téléphone</h3>' +
-      '<p class="muted" style="margin:0 0 10px">Envoie ta collection dans un <b>cloud privé</b> (un « Gist secret » de ton compte GitHub, visible par toi seul), puis récupère-la sur ton téléphone. Le jeton reste uniquement dans ce navigateur.</p>' +
+      '<p class="muted" style="margin:0 0 10px">Envoie ta collection dans un <b>cloud privé</b> (un « Gist secret » de ton compte GitHub, visible par toi seul), puis récupère-la sur ton téléphone. Le jeton reste uniquement dans ce navigateur. À chaque envoi, la version précédente du cloud est gardée de côté (bouton « Version précédente » si tu t\'es trompé).</p>' +
       '<label class="muted" style="display:block;margin-bottom:6px">Jeton GitHub</label><input type="password" id="syncToken" class="bigsearch" style="max-width:420px" value="' + esc(s.token || '') + '" placeholder="ghp_…" autocomplete="off">' +
-      '<div class="toolbar"><button class="btn primary" data-act="sync-push">⬆ Envoyer vers le cloud</button><button class="btn" data-act="sync-pull">⬇ Récupérer depuis le cloud</button></div>' +
+      '<div class="toolbar"><button class="btn primary" data-act="sync-push">⬆ Envoyer vers le cloud</button><button class="btn" data-act="sync-pull">⬇ Récupérer depuis le cloud</button><button class="btn" data-act="restore-prev" title="Revenir à la version du cloud d\'avant ton dernier envoi">↩ Version précédente</button></div>' +
       '<p class="muted" id="syncMsg" style="margin:0">' + syncInfo() + '</p>' +
       '<details class="guide"><summary>Comment créer le jeton (2 minutes)</summary><ol>' +
       '<li>Connecte-toi sur <b>github.com</b> (compte gratuit).</li>' +
@@ -1132,7 +1203,29 @@
 
   /* ---------- 9h-bis. Rappel d'envoi, accueil, partage en lecture seule ---------- */
   const unsent = () => { if (READONLY) return false; const s = sync(); return !!(s.token && DB.consoles.length && DB.modified > (s.lastRemote || 0)); };
-  const unsentBar = () => unsent() ? '<div class="backupbar warn"><span>☁️ Tu as des <b>modifications non envoyées</b> vers le cloud.</span><button class="btn small primary" data-act="sync-push">⬆ Envoyer maintenant</button></div>' : '';
+  const unsentBar = () => {
+    if (READONLY || !sync().token || !DB.consoles.length) return '';
+    const u = unsent();
+    return '<div class="backupbar' + (u ? ' warn' : '') + '"><span>' + (u ? '☁️ Tu as des <b>modifications non envoyées</b> vers le cloud.' : '☁️ ' + syncInfo()) + ' <span class="muted" id="syncMsg"></span></span>' +
+      '<span class="btns"><button class="btn small" data-act="sync-pull">⟳ Récupérer</button><button class="btn small' + (u ? ' primary' : '') + '" data-act="sync-push">⬆ Envoyer' + (u ? ' maintenant' : '') + '</button></span></div>';
+  };
+  /* Au lancement (et quand on revient sur l'appli) : le cloud a-t-il une version plus récente ? */
+  let lastCloudCheck = 0;
+  function showCloudBar() {
+    if (document.getElementById('cloudbar')) return;
+    document.body.insertAdjacentHTML('beforeend', '<div id="cloudbar" class="updbar cloudbar">☁️ Une version plus récente existe dans le cloud <button class="btn small primary" data-act="cloudbar-pull">Récupérer</button><button class="btn small" data-act="cloudbar-later">Plus tard</button></div>');
+  }
+  async function checkCloud() {
+    if (READONLY || document.hidden || !navigator.onLine) return;
+    const s = sync(); if (!s.token || !DB.consoles.length || unsent()) return;
+    if (Date.now() - lastCloudCheck < 30000) return; lastCloudCheck = Date.now();
+    try {
+      const id = await findGist(); if (!id) return;
+      const g = await gh('/gists/' + id); if (!g || !g.updated_at) return;
+      if (!s.remoteAt) { const r = await readGist(id); if (r.modified && r.modified > (s.lastRemote || 0)) showCloudBar(); else setSync({ remoteAt: g.updated_at }); return; }
+      if (g.updated_at !== s.remoteAt) showCloudBar();
+    } catch (e) { /* silencieux : pas de réseau, jeton refusé… */ }
+  }
 
   function welcomeView() {
     const s = sync();
@@ -1141,7 +1234,7 @@
       '<input type="password" id="syncToken" class="bigsearch" style="max-width:420px" value="' + esc(s.token || '') + '" placeholder="ghp_…" autocomplete="off">' +
       '<div class="toolbar"><button class="btn primary" data-act="sync-pull">⬇ Récupérer depuis le cloud</button></div><p class="muted" id="syncMsg" style="margin:0"></p></div>' +
       '<div class="card"><h3>📂 Importer un fichier de sauvegarde</h3><label class="btn">⬆ Importer un JSON<input type="file" id="importFile" accept=".json" hidden></label></div>' +
-      '<div class="card"><h3>✨ Commencer une collection vide</h3><div class="toolbar" style="margin-top:0"><button class="btn" data-act="new-console">+ Créer ma première console</button></div></div>';
+      '<div class="card"><h3>✨ Commencer une collection vide</h3><div class="toolbar" style="margin-top:0"><button class="btn" data-act="new-console">Créer ma première console</button></div></div>';
   }
 
   const SHARE_FILE = 'partage-fazerbleu.json';
@@ -1240,6 +1333,8 @@
     lastSer = null; save();
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* ignore */ }
     router();
+    setTimeout(checkCloud, 900);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkCloud(); });
     if (migratedFromLS) toast('Stockage amélioré : tes données ont été copiées dans un espace bien plus grand ✔');
   }
 
@@ -1263,8 +1358,8 @@
       '<p class="muted" style="margin:0 0 10px">' + (auto ? 'Dans chaque marque : les consoles de salon par date de sortie, puis les portables par date de sortie. Une nouvelle console se place toute seule au bon endroit (renseigne son type et son année).'
         : 'Tu déplaces toi-même chaque console avec les flèches. Une nouvelle console est ajoutée en dernier de sa marque.') + ' Les marques se déplacent dans les deux modes.</p>' +
       '<div class="olist">' + rows + '</div></div>' +
-      '<div class="card"><h3>Fond des logos de consoles</h3><div class="toolbar" style="margin-top:0"><div class="seg"><button data-act="logostyle" data-m="auto" class="' + (DB.logoStyle !== 'brand' ? 'on' : '') + '">Adapté à chaque logo</button><button data-act="logostyle" data-m="brand" class="' + (DB.logoStyle === 'brand' ? 'on' : '') + '">Couleur de la marque</button></div></div>' +
-      '<p class="muted" style="margin:0">« Adapté » choisit un fond clair ou foncé selon le logo pour qu\'il reste lisible. « Couleur de la marque » : rouge Nintendo, noir SEGA, bleu PlayStation. Chaque console peut aussi avoir son propre fond (✏️ Modifier la console).</p></div>';
+      '<div class="card"><h3>Fond des logos de consoles</h3><div class="toolbar" style="margin-top:0"><div class="seg"><button data-act="logostyle" data-m="white" class="' + (DB.logoStyle === 'white' ? 'on' : '') + '">Blanc</button><button data-act="logostyle" data-m="black" class="' + (DB.logoStyle === 'black' ? 'on' : '') + '">Noir</button></div></div>' +
+      '<p class="muted" style="margin:0">Le « noir » est la couleur du fond du site. Si un logo est illisible sur ce fond, choisis le fond de cette console à part (✏️ Modifier la console).</p></div>';
   }
   function moveBrand(b, d) {
     const l = brandList(), i = l.indexOf(b), j = i + d; if (j < 0 || j >= l.length) return;
@@ -1292,6 +1387,83 @@
     img.onerror = () => cb('white'); img.src = src;
   }
 
+  /* ---------- 9j. Frise déplaçable, Paramètres repliables, compléter les titres, doublons ---------- */
+  function initMarquee() {
+    const m = $('.marquee'); if (!m) return;
+    const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let hover = false, touching = false, drag = null, moved = 0, acc = 0, last = performance.now(), tm = 0;
+    m.scrollLeft = 1;
+    m.addEventListener('dragstart', (e) => e.preventDefault()); /* sinon le navigateur « attrape » le lien au lieu de faire glisser la frise */
+    const links = m.querySelectorAll('a'), n2 = links.length / 2;
+    const half = () => (n2 >= 1 ? links[n2].offsetLeft - links[0].offsetLeft : 0); /* largeur exacte d'un tour */
+    let ready = false;
+    const tick = (t) => {
+      if (!m.isConnected) return;
+      if (!ready) { ready = [...m.querySelectorAll('img')].every((i) => i.complete); if (!ready) { requestAnimationFrame(tick); return; } }
+      const dt = Math.min(60, t - last); last = t;
+      if (!reduce && !hover && !touching && !drag) { acc += dt * 0.04; if (acc >= 1) { const n = Math.floor(acc); m.scrollLeft += n; acc -= n; } }
+      const h = half(); if (h > 10) { if (m.scrollLeft >= h) m.scrollLeft -= h; else if (m.scrollLeft <= 0) m.scrollLeft += h - 1; }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    m.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') hover = true; });
+    m.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hover = false; });
+    m.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse') {
+        if (e.button !== 0) return;
+        drag = { x: e.clientX, sl: m.scrollLeft }; moved = 0; m.classList.add('dragging');
+        const mv = (ev) => { moved = Math.max(moved, Math.abs(ev.clientX - drag.x)); m.scrollLeft = drag.sl - (ev.clientX - drag.x); };
+        const up = () => { drag = null; m.classList.remove('dragging'); window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); };
+        window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+      } else { touching = true; clearTimeout(tm); }
+    });
+    const rel = (e) => { if (e.pointerType !== 'mouse') { clearTimeout(tm); tm = setTimeout(() => { touching = false; }, 1800); } };
+    m.addEventListener('pointerup', rel); m.addEventListener('pointercancel', rel);
+    m.addEventListener('touchend', () => { clearTimeout(tm); tm = setTimeout(() => { touching = false; }, 1800); }, { passive: true });
+    m.addEventListener('click', (e) => { if (moved > 5) { e.preventDefault(); e.stopPropagation(); moved = 0; } }, true);
+  }
+  /* Paramètres : chaque carte devient un menu qui se déplie (l'état est mémorisé) */
+  function foldSettings() {
+    document.querySelectorAll('#app > .card').forEach((card) => {
+      const h3 = card.querySelector(':scope > h3'); if (!h3) return;
+      const id = h3.textContent.trim(), d = document.createElement('details'), sm = document.createElement('summary'), body = document.createElement('div');
+      d.className = 'card fold'; d.dataset.fold = id; if (S.fold[id]) d.open = true;
+      sm.appendChild(h3); body.className = 'foldbody';
+      while (card.firstChild) body.appendChild(card.firstChild);
+      d.appendChild(sm); d.appendChild(body); card.replaceWith(d);
+    });
+  }
+  document.addEventListener('toggle', (e) => { const d = e.target; if (d && d.dataset && d.dataset.fold) S.fold[d.dataset.fold] = d.open; }, true);
+
+  function titlesView() {
+    const groups = [];
+    DB.consoles.forEach((c) => { const l = c.games.filter((g) => !g.nom); if (l.length) groups.push({ c, l }); });
+    const total = groups.reduce((n, x) => n + x.l.length, 0);
+    let h = '<h2 class="page">Compléter les titres</h2><p class="sub"><b id="tleft">' + total + '</b> jeux sans titre. Tape le titre puis <b>Entrée</b> : on passe au suivant. Laisse vide pour passer.</p>';
+    if (!total) return h + '<div class="card">🎉 Tous tes jeux ont un titre.</div>';
+    const names = [...new Set([].concat(...DB.consoles.map((c) => c.games.map((g) => g.nom))).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr')).slice(0, 500);
+    h += '<datalist id="titleList">' + names.map((n) => '<option value="' + esc(n) + '">').join('') + '</datalist>';
+    groups.forEach(({ c, l }) => {
+      h += '<h3 class="thead">' + logoHtml(c) + '<span>' + esc(c.nom) + ' <small class="muted">(' + l.length + ')</small></span></h3><div class="tlist">';
+      l.forEach((g) => {
+        const clue = [g.licence, g.anneeSortie, g.achat, (g.notes || '').slice(0, 60)].filter(Boolean).join(' · ');
+        h += '<div class="trow" data-c="' + c.id + '" data-id="' + g.id + '">' + cover(g, 'sm') + '<div class="tinfo"><div class="row">' + (g.version ? '<span class="pill">' + esc(g.version) + '</span>' : '') + (g.qualite ? pill(g.qualite) : '') + '</div>' +
+          (clue ? '<div class="muted">' + esc(clue) + '</div>' : '') + '</div><input class="tinput" type="text" list="titleList" placeholder="Titre du jeu…" autocomplete="off"><span class="tok">✓</span></div>';
+      });
+      h += '</div>';
+    });
+    return h;
+  }
+  function dupGroups() {
+    const out = [], norm = (t) => plain(t).replace(/[^a-z0-9]+/g, '');
+    DB.consoles.forEach((c) => {
+      const m = {};
+      c.games.forEach((g) => { if (!g.nom) return; const k = norm(g.nom) + '|' + norm(g.version) + '|' + (isDemat(g) ? 'd' : 'p'); (m[k] = m[k] || []).push(g); });
+      Object.keys(m).forEach((k) => { if (m[k].length > 1) out.push({ c, l: m[k] }); });
+    });
+    return out;
+  }
+
   /* ---------- 11. Recherche globale ---------- */
   function search(q) {
     q = q.trim().toLowerCase();
@@ -1306,7 +1478,7 @@
     Object.keys(DB.wishlists).forEach((k) => {
       const r = DB.wishlists[k].filter(hit);
       if (!r.length) return; n += r.length;
-      h += '<div class="card"><h3>Wishlist ' + k + ' (' + r.length + ')</h3>' + r.map((w) => '<div class="hit">' + esc(w.nom || 'Jeu à identifier') + ' <span class="muted">· ' + esc(w.description) + ' · ' + esc(w.prix) + '</span></div>').join('') + '</div>';
+      h += '<div class="card"><h3>Wishlist ' + esc(wishName(k)) + ' (' + r.length + ')</h3>' + r.map((w) => '<div class="hit">' + esc(w.nom || 'Jeu à identifier') + ' <span class="muted">· ' + esc(w.description) + ' · ' + esc(w.prix) + '</span></div>').join('') + '</div>';
     });
     const o = DB.commandes.filter(hit);
     if (o.length) { n += o.length; h += '<div class="card"><h3>Commandes (' + o.length + ')</h3>' + o.map((x) => '<div class="hit">' + esc(x.nom || 'Collector') + ' <span class="muted">· ' + esc(x.site) + ' · ' + esc(x.date) + '</span></div>').join('') + '</div>'; }
@@ -1335,7 +1507,7 @@
     const t = e.target.closest('[data-act]'); if (!t) return;
     const d = t.dataset;
     if (READONLY && ['mode', 'sort', 'zoom', 'view-game', 'vswap', 'open-vitrine', 'tab', 'wmode', 'view-wish', 'preset'].indexOf(d.act) < 0) { e.preventDefault(); return; }
-    if (t.tagName === 'A' && d.act === 'view-game') e.preventDefault();
+    if (t.tagName === 'A' && (d.act === 'view-game' || d.act === 'view-wish')) e.preventDefault();
     switch (d.act) {
       case 'mode': S.mode = d.m; refresh(); break;
       case 'sort': { const id = route()[1], s = S.sort[id]; S.sort[id] = !s || s.key !== d.k ? { key: d.k, dir: 1 } : (s.dir === 1 ? { key: d.k, dir: -1 } : null); if (!S.sort[id]) delete S.sort[id]; paintConsole(); break; }
@@ -1391,6 +1563,23 @@
       case 'move-console': moveConsole(d.c, Number(d.d)); break;
       case 'logostyle': DB.logoStyle = d.m; save(); renderNav(); router(); break;
       case 'wmode': S.wishMode = d.m; refresh(); break;
+      case 'new-wishlist':
+        openForm('Nouvelle wishlist', [{ k: 'nom', label: 'Nom de la wishlist (ex. Mario, PS5, Cadeaux…)', wide: true }], {}, (v) => {
+          const nom = (v.nom || '').trim(); if (!nom) return;
+          const k = 'w' + uid(); DB.wishlists[k] = []; DB.wishNames[k] = nom; save(); renderNav(); location.hash = '#/wish/' + k; toast('Wishlist créée');
+        }); break;
+      case 'rename-wishlist':
+        openForm('Renommer la wishlist', [{ k: 'nom', label: 'Nom', wide: true }], { nom: wishName(d.k) }, (v) => {
+          const nom = (v.nom || '').trim(); if (!nom) return; DB.wishNames[d.k] = nom; save(); renderNav(); router();
+        }); break;
+      case 'del-wishlist': {
+        const n = (DB.wishlists[d.k] || []).length;
+        if (confirm('Supprimer la wishlist « ' + wishName(d.k) + ' »' + (n ? ' et ses ' + n + ' jeux' : '') + ' ?')) { delete DB.wishlists[d.k]; delete DB.wishNames[d.k]; save(); location.hash = '#/dashboard'; renderNav(); toast('Wishlist supprimée'); }
+        break;
+      }
+      case 'cloudbar-pull': { const b = document.getElementById('cloudbar'); if (b) b.remove(); cloudPull(); break; }
+      case 'cloudbar-later': { const b = document.getElementById('cloudbar'); if (b) b.remove(); break; }
+      case 'restore-prev': cloudRestorePrev(); break;
       case 'new-console': editConsole(null); break;
       case 'edit-console': editConsole(d.c); break;
       case 'del-console': delConfirm('Supprimer cette console et tous ses jeux ?', () => { DB.consoles = DB.consoles.filter((c) => c.id !== d.c); location.hash = '#/dashboard'; }); break;
@@ -1414,6 +1603,14 @@
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (t.dataset && t.dataset.f) { S.filters[route()[1]][t.dataset.f] = t.value; paintConsole(); }
+    if (t.id === 'presetSel' && t.value) {
+      const v = t.value, p = v[0] === 'b' ? BUILTIN_PRESETS[Number(v.slice(1))] : (DB.presets.find((x) => x.id === v.slice(1)) || {}).f;
+      S.filters[route()[1]] = Object.assign({ q: '', statut: '', licence: '', flag: '' }, p || {}); refresh();
+    }
+    if (t.classList && t.classList.contains('tinput')) {
+      const row = t.closest('.trow'), c = row && consoleById(row.dataset.c), g = c && c.games.find((x) => x.id === row.dataset.id);
+      if (g) { g.nom = t.value.trim(); save(); renderNav(); row.classList.toggle('done', !!g.nom); const el = $('#tleft'); if (el) el.textContent = document.querySelectorAll('.trow:not(.done)').length; }
+    }
     if (t.id === 'wishPrio' || t.id === 'wishCol') paintWish();
     if (t.id === 'priceFile' && t.files[0]) readPriceFile(t.files[0]);
     if (t.id === 'importFile' && t.files[0] && !READONLY) {
@@ -1429,6 +1626,12 @@
   $('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') closeModal(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeModal();
+    if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('tinput')) {
+      e.preventDefault();
+      const all = [...document.querySelectorAll('.tinput')], i = all.indexOf(e.target); e.target.blur();
+      const nxt = all.slice(i + 1).find((x) => !x.closest('.trow').classList.contains('done')) || all[i + 1];
+      if (nxt) { nxt.focus(); nxt.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    }
     if (route()[0] === 'game' && $('#modal').classList.contains('hidden') && !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
       const l = document.querySelector('.vnav a[title^="' + (e.key === 'ArrowLeft' ? 'Précédent' : 'Suivant') + '"]'); if (l) location.hash = l.getAttribute('href');
     }
