@@ -1,5 +1,5 @@
 /* =====================================================================
-   Collection Jeux Vidéo – Fazerbleu   (V9)
+   Collection Jeux Vidéo – Fazerbleu   (V10 = version 1.0)
    Application 100 % navigateur (HTML + CSS + JavaScript vanilla).
    Les données de départ sont dans data.js (INITIAL_DATA).
    Tes modifications sont enregistrées dans le navigateur (IndexedDB, avec repli sur localStorage).
@@ -11,7 +11,8 @@
   const KEY = 'fazerbleu-collection-v1';
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const uid = () => Math.random().toString(36).slice(2, 10);
-  let READONLY = false, HIDE_PRICE = false; /* lien de partage : lecture seule, prix masqués ou non */
+  const APP_VERSION = '1.0.0';
+  let READONLY = false, HIDE_PRICE = false, ONLY = null; /* lien de partage : lecture seule, prix masqués ou non */
 
   /* V8 : les données vivent dans IndexedDB (des centaines de Mo) et non plus dans localStorage (~5 Mo).
      Si IndexedDB est indisponible, on retombe automatiquement sur localStorage. */
@@ -150,7 +151,22 @@
     if (pend) return; pend = true;
     Promise.resolve().then(() => { pend = false; idbSet(KEY, DB).catch(() => toast('Sauvegarde automatique impossible : exporte un fichier JSON.')); });
   }
+  /* Historique des prix : chaque estimation est gardée avec sa date, à partir de l'activation */
+  function trackPrices() {
+    if (!DB.histOn || READONLY) return;
+    const now = Date.now(); let tot = 0;
+    DB.consoles.forEach((c) => c.games.forEach((g) => {
+      const p = g.prixEstime; if (p == null || p === '' || isNaN(p)) return;
+      tot += Number(p) * (Number(g.quantite) || 1);
+      const h = g.hist || (g.hist = []);
+      if (!h.length || h[h.length - 1][1] !== Number(p)) h.push([now, Number(p)]);
+    }));
+    const vh = DB.valHist || (DB.valHist = []), last = vh[vh.length - 1], r = Math.round(tot);
+    if (!last || last[1] !== r) { if (last && vh.length > 1 && now - last[0] < 3600000) { last[0] = now; last[1] = r; } else vh.push([now, r]); }
+    if (vh.length > 600) vh.splice(1, vh.length - 600);
+  }
   function save() {
+    trackPrices();
     const body = JSON.stringify(Object.assign({}, DB, { modified: 0, lastBackup: 0 }));
     if (body !== lastSer) { if (lastSer !== null) DB.modified = Date.now(); lastSer = body; }
     persist();
@@ -169,11 +185,24 @@
     const n = (t.match(/\d+(?:[,.]\d+)?/g) || []).map((x) => parseFloat(x.replace(',', '.'))).filter((x) => x < 5000);
     return n.length ? [n[0], n.length > 1 ? n[1] : n[0]] : [null, null];
   };
-  let toastTimer;
-  function toast(msg) {
-    const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 3200);
+  let toastTimer, UNDO = null;
+  function toast(msg, withUndo) {
+    const t = $('#toast'); t.textContent = msg;
+    if (withUndo && UNDO) { const b = document.createElement('button'); b.className = 'toastbtn'; b.dataset.act = 'undo'; b.textContent = 'Annuler'; t.appendChild(b); }
+    t.classList.remove('hidden');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), withUndo ? 9000 : 3200);
   }
+  /* Annuler : on garde une copie de la collection juste avant une suppression ou une opération groupée */
+  function snap(label) { try { UNDO = { label, json: JSON.stringify(DB), at: Date.now() }; } catch (e) { UNDO = null; } }
+  function undo() {
+    if (!UNDO) { toast('Rien à annuler'); return; }
+    try {
+      const d = JSON.parse(UNDO.json); UNDO = null;
+      DB = d; normalize(DB); lastSer = null; save(); DB.modified = Date.now(); persist();
+      S.sel = new Set(); renderNav(); router(); toast('Action annulée ✔');
+    } catch (e) { toast('Annulation impossible'); }
+  }
+  const undoBar = () => (!READONLY && UNDO && Date.now() - UNDO.at < 1800000) ? '<div class="backupbar"><span>↶ Dernière action : <b>' + esc(UNDO.label) + '</b></span><span class="btns"><button class="btn small" data-act="undo">Annuler</button></span></div>' : '';
 
   /* Couleur d'un état (Neuf, Parfait, Très bon, Bon, Mauvais…) */
   function etatKey(v) {
@@ -234,7 +263,7 @@
   const rowClass = (g) => (g.special ? ' is-special' : '') + (g.platine ? ' is-platine' : '');
 
   /* ---------- 3. État de l'interface ---------- */
-  const S = { print: { what: 'collection', compact: true }, mode: 'table', wishMode: 'table', filters: {}, sort: {}, tab: {}, fold: {}, dom: {} };
+  const S = { print: { what: 'collection', compact: true }, mode: 'table', wishMode: 'table', filters: {}, sort: {}, tab: {}, fold: {}, dom: {}, sel: new Set(), selRoute: '', curKeys: [], bulkField: 'boite', all: { q: '', cons: '', licence: '', statut: '', flag: '', sort: 'nom', tab: 'jeux', lq: '' }, allLimit: 200 };
   const BRAND_COLORS = { Nintendo: '#e4372c', SEGA: '#7d8494', PlayStation: '#2f7bff', Xbox: '#2faa3f' };
   const brandColor = (b) => BRAND_COLORS[b] || '#8e6bd8';
   const brandList = () => {
@@ -258,9 +287,10 @@
   /* ---------- 4. Navigation ---------- */
   function renderNav() {
     const [view, id] = route();
+    if (ONLY) { $('#sidebar').innerHTML = '<h3>Wishlist</h3><a class="active" href="#/wish/' + ONLY + '"><span>' + esc(wishName(ONLY)) + '</span><small>' + DB.wishlists[ONLY].length + '</small></a>'; return; }
     const a = (href, label, count, active) =>
       '<a href="' + href + '" class="' + (active ? 'active' : '') + '"><span>' + label + '</span>' + (count != null ? '<small>' + count + '</small>' : '') + '</a>';
-    let h = '<h3>Tableau de bord</h3>' + a('#/dashboard', '📊 Vue d\'ensemble', null, view === 'dashboard') + a('#/stats', '📈 Statistiques', null, view === 'stats') + a('#/check', '🔎 Brocante', null, view === 'check') + (READONLY ? '' : (() => { const n = DB.consoles.reduce((x, c) => x + c.games.filter((g) => !g.nom).length, 0); return n ? a('#/titles', '✏️ Compléter les titres', n, view === 'titles') : ''; })());
+    let h = '<h3>Tableau de bord</h3>' + a('#/dashboard', '📊 Vue d\'ensemble', null, view === 'dashboard') + a('#/stats', '📈 Statistiques', null, view === 'stats') + a('#/check', '🔎 Brocante', null, view === 'check') + a('#/all', '🗂 Tous les jeux', DB.consoles.reduce((x, c) => x + c.games.length, 0), view === 'all') + (READONLY ? '' : (() => { const n = DB.consoles.reduce((x, c) => x + c.games.filter((g) => !g.nom).length, 0); return n ? a('#/titles', '✏️ Compléter les titres', n, view === 'titles') : ''; })());
     h += '<h3>Ma collection</h3>';
     brandList().forEach((b) => {
       h += '<div class="navbrand">' + esc(b) + '</div>';
@@ -280,7 +310,7 @@
     }
     if (!READONLY) {
       h += '<h3>Commandes</h3>' + a('#/orders', '📦 Précommandes & commandes', DB.commandes.length, view === 'orders');
-      h += '<h3>Paramètres</h3>' + a('#/settings', '⚙️ Paramètres', unsent() ? '☁️' : null, view === 'settings') + a('#/print', '🖨 Impression', null, view === 'print');
+      h += '<h3>Paramètres</h3>' + a('#/settings', '⚙️ Paramètres', unsent() ? '☁️' : null, view === 'settings') + a('#/print', '🖨 Impression', null, view === 'print') + a('#/about', 'ℹ️ À propos', null, view === 'about');
     }
     $('#sidebar').innerHTML = h;
   }
@@ -291,7 +321,9 @@
     renderNav();
     const [view, id, gid] = route();
     const app = $('#app');
-    if (READONLY && ['settings', 'orders', 'print', 'titles'].indexOf(view) >= 0) { location.hash = '#/dashboard'; return; }
+    if (READONLY && ['settings', 'orders', 'print', 'titles', 'about'].indexOf(view) >= 0) { location.hash = '#/dashboard'; return; }
+    if (ONLY && (view !== 'wish' || id !== ONLY)) { location.hash = '#/wish/' + ONLY; return; }
+    if (S.selRoute !== location.hash) { S.sel = new Set(); S.selRoute = location.hash; }
     if (view === 'game' && !(consoleById(id) && consoleById(id).games.some((g) => g.id === gid))) { location.hash = consoleById(id) ? '#/console/' + id : '#/dashboard'; return; }
     if (view === 'console' && consoleById(id)) app.innerHTML = consoleView(consoleById(id));
     else if (view === 'wish' && DB.wishlists[id]) app.innerHTML = wishView(id);
@@ -300,11 +332,14 @@
     else if (view === 'stats') app.innerHTML = statsView();
     else if (view === 'print') app.innerHTML = printView();
     else if (view === 'titles') app.innerHTML = titlesView();
+    else if (view === 'about') app.innerHTML = aboutView();
+    else if (view === 'all') app.innerHTML = allView();
     else if (view === 'check') app.innerHTML = checkView();
     else if (view === 'game') app.innerHTML = vitrineView(id, gid);
     else app.innerHTML = dashboardView();
     if (view === 'console') paintConsole();
     if (view === 'wish') paintWish();
+    if (view === 'all') paintAll();
     if (view === 'orders') paintOrders();
     if (view === 'check') { paintCheck(); }
     if (view === 'settings') foldSettings();
@@ -333,7 +368,7 @@
     /* Rappel de sauvegarde + espace de stockage */
     const bd = DB.lastBackup ? Math.floor((Date.now() - DB.lastBackup) / 86400000) : null, up = usage() / QUOTA * 100;
     if (!READONLY) h += '<div class="backupbar' + (bd === null || bd > 14 ? ' warn' : '') + '"><span>💾 Dernière sauvegarde : <b>' + ago(DB.lastBackup) + '</b>' + (bd === null || bd > 14 ? ' — pense à sauvegarder tes données' : '') + '</span><button class="btn small primary" data-act="export-json">⬇ Sauvegarder maintenant</button></div>';
-    h += unsentBar();
+    h += undoBar() + unsentBar();
     if (!READONLY && up > 75) h += '<div class="notice">⚠️ Le stockage du navigateur est utilisé à <b>' + Math.round(up) + ' %</b>. Va dans <a href="#/settings">Paramètres</a> pour optimiser tes photos.</div>';
 
     /* Frise des jaquettes qui défile toute seule (pause quand la souris passe dessus) */
@@ -433,7 +468,7 @@
       '<optgroup label="Filtres rapides">' + BUILTIN.map((p, i) => '<option value="b' + i + '"' + (curB === i && !curU ? ' selected' : '') + '>' + p[0] + '</option>').join('') + '</optgroup>' +
       (DB.presets.length ? '<optgroup label="Mes filtres">' + DB.presets.map((p) => '<option value="u' + p.id + '"' + (curU && curU.id === p.id ? ' selected' : '') + '>' + esc(p.nom) + '</option>').join('') + '</optgroup>' : '') +
       '</select><button class="btn small" data-act="save-preset">Enregistrer ce filtre</button>' + (curU ? '<button class="btn small danger" data-act="del-preset" data-pid="' + curU.id + '">Supprimer « ' + esc(curU.nom) + ' »</button>' : '') + '</div>';
-    h += '<div id="results"></div>';
+    h += '<div id="bulkbar"></div><div id="results"></div>';
     return h;
   }
   const BUILTIN_PRESETS = [{}, { statut: 'Loose' }, { statut: 'Notice manquante' }, { flag: 'special' }, { flag: 'platine' }, { flag: 'old' }];
@@ -511,7 +546,7 @@
     const q = list.reduce((s, g) => s + (Number(g.quantite) || 1), 0);
     const v = list.reduce((s, g) => s + (Number(g.prixEstime) || 0) * (Number(g.quantite) || 1), 0);
     let h = '<p class="muted">' + list.length + ' lignes · ' + q + ' exemplaires' + (HIDE_PRICE ? '' : ' · valeur estimée ' + eur(v)) + '</p>';
-    if (!list.length) { $('#results').innerHTML = h + '<div class="card">Aucun jeu ne correspond.</div>'; return; }
+    if (!list.length) { $('#results').innerHTML = h + '<div class="card">Aucun jeu ne correspond.</div>'; S.curKeys = []; paintBulk(); return; }
 
     if (S.mode === 'spine') {
       h += '<div class="shelf">' + list.map((g) => spineHtml(c, g)).join('') + '</div>';
@@ -530,11 +565,11 @@
         '<div class="gfoot"><span class="price' + (g.prixEstime == null ? ' none' : '') + '" title="' + (g.prixDate ? 'Estimation du ' + fdate(g.prixDate) : "Date de l'estimation non renseignée") + '">' + eur(g.prixEstime) + '</span></div></div></div>').join('') + '</div>';
     } else {
       const th = (k, l) => '<th data-act="sort" data-k="' + k + '">' + l + (S.sort[c.id] && S.sort[c.id].key === k ? (S.sort[c.id].dir > 0 ? ' ▲' : ' ▼') : '') + '</th>';
-      h += '<div class="tablewrap"><table><thead><tr>' + th('nom', 'Jeu') + (dm ? '' : th('support', c.support) + th('boite', 'Boîte') + th('notice', 'Notice') + th('qualite', 'Qualité')) +
+      h += '<div class="tablewrap"><table><thead><tr>' + (READONLY ? '' : '<th class="chk"><input type="checkbox" data-selall title="Tout sélectionner"></th>') + th('nom', 'Jeu') + (dm ? '' : th('support', c.support) + th('boite', 'Boîte') + th('notice', 'Notice') + th('qualite', 'Qualité')) +
         th('quantite', 'Qté') + th('prixEstime', 'Estimé') + th('achat', 'Prix d\'achat - Magasin') + th('version', 'Version') + th('anneeSortie', 'Sortie') + th('anneeAchat', 'Achat') +
         th('test', 'Test') + th('desc100', '100 %') + '<th>Notes</th><th></th></tr></thead><tbody>';
       list.forEach((g) => {
-        h += '<tr class="' + rowClass(g).trim() + '" data-act="view-game" data-c="' + c.id + '" data-id="' + g.id + '" style="cursor:pointer"><td><div class="tcell">' + cover(g, 'sm') +
+        h += '<tr class="' + rowClass(g).trim() + '" data-act="view-game" data-c="' + c.id + '" data-id="' + g.id + '" style="cursor:pointer">' + (READONLY ? '' : '<td class="chk"><input type="checkbox" data-sel="' + c.id + '|' + g.id + '"' + (S.sel.has(c.id + '|' + g.id) ? ' checked' : '') + '></td>') + '<td><div class="tcell">' + cover(g, 'sm') +
           '<span class="title">' + gameTitle(g) + gameIcons(g) + '</span>' + (g.verifier ? ' <span class="pill e-mauvais">à vérifier</span>' : '') + '</div></td>' +
           (dm ? '' : '<td>' + pill(g.support) + '</td><td>' + pill(g.boite) + '</td><td>' + pill(g.notice) + '</td><td>' + pill(g.qualite) + '</td>') + '<td class="n">' + g.quantite + '</td><td class="n">' + eur(g.prixEstime) + (g.prixDate ? '<small class="pdate' + (isStale(g) ? ' old' : '') + '">' + (isStale(g) ? '⏳ ' : '') + fdate(g.prixDate) + '</small>' : '') + '</td>' +
           '<td>' + esc(g.achat) + '</td><td>' + esc(g.version) + '</td><td class="n">' + esc(g.anneeSortie) + '</td><td class="n">' + esc(g.anneeAchat) + '</td><td>' + esc(g.test) + '</td>' +
@@ -544,6 +579,7 @@
       h += '</tbody></table></div>';
     }
     $('#results').innerHTML = h;
+    S.curKeys = list.map((g) => c.id + '|' + g.id); paintBulk();
     if (S.mode === 'spine') paintSpines();
   }
 
@@ -552,7 +588,7 @@
   function wishView(key) {
     const l = DB.wishlists[key];
     const mn = l.reduce((s, w) => s + (w.prixMin || 0) * (w.quantite || 1), 0), mx = l.reduce((s, w) => s + (w.prixMax || 0) * (w.quantite || 1), 0);
-    return '<div class="pagehead"><h2 class="page">Wishlist ' + esc(wishName(key)) + '</h2><div class="pageactions"><button class="btn small" data-act="rename-wishlist" data-k="' + key + '">✏️ Renommer</button><button class="btn small danger" data-act="del-wishlist" data-k="' + key + '">🗑 Supprimer la liste</button></div></div><p class="sub">' + l.length + ' jeux à acheter' + (HIDE_PRICE ? '' : ' · budget estimé ' + eur(mn) + ' à ' + eur(mx) + ' (lignes sans prix chiffré ignorées)') + '</p>' +
+    return '<div class="pagehead"><h2 class="page">Wishlist ' + esc(wishName(key)) + '</h2><div class="pageactions"><button class="btn small" data-act="wshare" data-k="' + key + '">🔗 Partager cette liste</button><button class="btn small" data-act="rename-wishlist" data-k="' + key + '">✏️ Renommer</button><button class="btn small danger" data-act="del-wishlist" data-k="' + key + '">🗑 Supprimer la liste</button></div></div><p class="sub">' + l.length + ' jeux à acheter' + (HIDE_PRICE ? '' : ' · budget estimé ' + eur(mn) + ' à ' + eur(mx) + ' (lignes sans prix chiffré ignorées)') + '</p>' +
       '<div class="toolbar"><input id="wishQ" type="search" placeholder="Filtrer…">' +
       '<label class="muted"><input type="checkbox" id="wishPrio"> Prioritaires</label><label class="muted"><input type="checkbox" id="wishCol"> ⭐ Collectors</label><span class="spacer"></span>' +
       '<div class="seg"><button data-act="wmode" data-m="table" class="' + (S.wishMode === 'table' ? 'on' : '') + '">Tableau</button><button data-act="wmode" data-m="cards" class="' + (S.wishMode === 'cards' ? 'on' : '') + '">Cartes</button><button data-act="wmode" data-m="wall" class="' + (S.wishMode === 'wall' ? 'on' : '') + '">Vitrine</button></div>' +
@@ -618,7 +654,7 @@
 
   /* ---------- 9. Paramètres ---------- */
   function settingsView() {
-    return '<h2 class="page">Paramètres</h2><p class="sub">Tes données sont enregistrées dans ce navigateur. Fais régulièrement une sauvegarde JSON.</p>' +
+    return '<h2 class="page">Paramètres</h2><p class="sub">Version ' + APP_VERSION + ' · tes données sont enregistrées dans ce navigateur. Fais régulièrement une sauvegarde JSON.</p>' +
       '<div class="card"><h3>Sauvegarde</h3><p class="muted" style="margin:0 0 10px">Dernière sauvegarde : <b>' + ago(DB.lastBackup) + '</b></p><div class="toolbar" style="margin-top:0"><button class="btn primary" data-act="export-json">⬇ Exporter tout (JSON)</button>' +
       '<label class="btn">⬆ Importer un JSON<input type="file" id="importFile" accept=".json" hidden></label></div></div>' +
       '<div class="card"><h3>Espace de stockage</h3>' + gauge() + legacyBtn() + '<div class="toolbar"><button class="btn" data-act="optimize">🗜 Optimiser mes photos</button></div><p class="muted" style="margin:0">Réduit le poids des photos déjà ajoutées (sans changer leur apparence à l\'écran).</p></div>' +
@@ -626,7 +662,7 @@
       '<div class="toolbar" style="margin-top:0"><label class="btn">⬆ Importer des prix (CSV)<input type="file" id="priceFile" accept=".csv,.txt" hidden></label>' +
       '<button class="btn" data-act="fresh">Considérer toutes mes estimations comme à jour aujourd\'hui</button><a class="btn" href="https://www.pricecharting.com/" target="_blank" rel="noopener">Ouvrir PriceCharting ↗</a></div></div>' +
       '<div class="card"><h3>Export CSV d\'une console</h3><div class="toolbar">' + DB.consoles.map((c) => '<button class="btn" data-act="export-csv" data-id="' + c.id + '">' + esc(c.nom) + '</button>').join('') + '</div></div>' +
-      orderCard() +
+      histCard() + orderCard() +
       syncCard() + shareCard() +
       '<div class="card"><h3>Zone dangereuse</h3><button class="btn danger" data-act="reset">Revenir aux données de départ</button></div>';
   }
@@ -787,7 +823,7 @@
     return '<div class="dsec"><div class="dsechead"><h4>Valeur et achat</h4><a class="btn small" target="_blank" rel="noopener" href="https://www.pricecharting.com/search-products?type=prices&q=' + encodeURIComponent((g.nom || '') + ' ' + c.nom) + '">🔎 Voir sur PriceCharting</a></div><div class="etats">' +
       (HIDE_PRICE ? '' : '<div class="etat plain big"><i>💰</i><div><span>Prix estimé</span><b>' + eur(g.prixEstime) + '</b><small class="pdate' + (stale ? ' old' : '') + '">' + (g.prixDate ? (stale ? '⏳ ' : '') + 'mis à jour le ' + fdate(g.prixDate) : 'date de mise à jour non renseignée') + '</small></div></div>') +
       (READONLY ? '' : '<div class="etat plain"><i>🛒</i><div><span>Acheté</span><b>' + esc(g.achat || '—') + '</b></div></div>') +
-      '<div class="etat plain"><i>🔢</i><div><span>Quantité</span><b>' + esc(g.quantite) + '</b></div></div></div></div>';
+      '<div class="etat plain"><i>🔢</i><div><span>Quantité</span><b>' + esc(g.quantite) + '</b></div></div></div>' + histList(g) + '</div>';
   }
   function gMore(g) {
     const info = [['Année de sortie', g.anneeSortie], ['Année d\'achat', g.anneeAchat], ['Version', g.version], ['Licence', g.licence], ['Test', g.test], ['Objectif / avancement 100 %', g.desc100]].filter((r) => r[1]);
@@ -957,7 +993,7 @@
       card('Qualité globale', hbars(qual, null)) +
       (HIDE_PRICE ? '' : card('Les jeux les plus chers', '<ol class="toplist">' + top.map((x) => '<li><span>' + esc(x.g.nom || 'Sans titre') + ' <small class="muted">' + esc(x.c.nom) + '</small></span><b>' + eur(x.g.prixEstime) + '</b></li>').join('') + '</ol>')) +
       '</div>' +
-      card('Évolution : jeux achetés par année', ys.length ? '<div class="vchart">' + cols + '</div><p class="muted" style="margin:6px 0 0">Σ = total cumulé.' + (unknown ? ' ' + unknown + ' jeux sans année d\'achat ne sont pas comptés.' : '') + '</p>' : '<p class="muted">Renseigne l\'« Année d\'achat » de tes jeux pour voir ce graphique.</p>');
+      histChart() + card('Évolution : jeux achetés par année', ys.length ? '<div class="vchart">' + cols + '</div><p class="muted" style="margin:6px 0 0">Σ = total cumulé.' + (unknown ? ' ' + unknown + ' jeux sans année d\'achat ne sont pas comptés.' : '') + '</p>' : '<p class="muted">Renseigne l\'« Année d\'achat » de tes jeux pour voir ce graphique.</p>');
   }
 
   /* ---------- 9c. Impression (brocante) ---------- */
@@ -1162,8 +1198,8 @@
       const d = await readGist(id);
       if (!d.consoles || !d.wishlists) throw new Error('Sauvegarde illisible.');
       if (DB.consoles.some((c) => c.games.length) && !confirm((unsent() ? 'Attention : tu as des modifications non envoyées, elles seront perdues.\n\n' : '') + 'Remplacer les données de cet appareil par celles du cloud (' + d.consoles.reduce((n, c) => n + c.games.length, 0) + ' jeux) ?')) { syncMsg('Récupération annulée.'); return; }
-      DB = migrate(d); normalize(DB); lastSer = null; save(); setSync({ last: Date.now(), lastRemote: DB.modified, remoteAt: gistMeta && gistMeta.at });
-      renderNav(); router(); toast('Collection mise à jour depuis le cloud');
+      snap('Récupération depuis le cloud'); DB = migrate(d); normalize(DB); lastSer = null; save(); setSync({ last: Date.now(), lastRemote: DB.modified, remoteAt: gistMeta && gistMeta.at });
+      renderNav(); router(); toast('Collection mise à jour depuis le cloud', true);
     } catch (e) { syncMsg(e.message); toast(e.message); }
   }
   async function cloudRestorePrev() {
@@ -1174,9 +1210,16 @@
       if (!d.consoles || !d.wishlists) throw new Error('Version précédente illisible.');
       const n = d.consoles.reduce((x, c) => x + c.games.length, 0), when = d.modified ? new Date(d.modified).toLocaleString('fr-FR') : 'date inconnue';
       if (!confirm('Remplacer les données de cet appareil par la version précédente du cloud (' + n + ' jeux, modifiée le ' + when + ') ?')) { syncMsg('Restauration annulée.'); return; }
-      DB = migrate(d); normalize(DB); lastSer = null; save(); DB.modified = Date.now(); persist();
-      renderNav(); router(); toast('Version précédente restaurée. Clique sur « Envoyer » pour la remettre aussi dans le cloud.');
+      snap('Restauration de la version précédente'); DB = migrate(d); normalize(DB); lastSer = null; save(); DB.modified = Date.now(); persist();
+      renderNav(); router(); toast('Version précédente restaurée. Clique sur « Envoyer » pour la remettre aussi dans le cloud.', true);
     } catch (e) { const m = /introuvable/.test(e.message) ? 'Pas encore de version précédente dans le cloud : elle apparaît à ton prochain envoi.' : e.message; syncMsg(m); toast(m); }
+  }
+  function weightInfo() {
+    let tot = 0, img = 0;
+    try { tot = JSON.stringify(DB).length; } catch (e) { return ''; }
+    DB.consoles.forEach((c) => c.games.forEach((g) => { img += (g.image ? g.image.length : 0) + (g.imageEdition ? g.imageEdition.length : 0); }));
+    const mb = (n) => (n / 1048576).toFixed(1).replace('.', ',') + ' Mo', big = tot > 20 * 1048576;
+    return '<p class="muted" style="margin:8px 0 0">Poids de ta collection : <b>' + mb(tot) + '</b> (dont photos ' + mb(img) + '). Chaque envoi garde aussi la version précédente dans le cloud, donc compte le double.' + (big ? ' <span class="goldtxt">⚠️ Collection lourde : les envois peuvent devenir lents. « Optimiser mes photos » (carte Espace de stockage) réduit ce poids.</span>' : '') + '</p>';
   }
   function syncCard() {
     const s = sync();
@@ -1184,7 +1227,7 @@
       '<p class="muted" style="margin:0 0 10px">Envoie ta collection dans un <b>cloud privé</b> (un « Gist secret » de ton compte GitHub, visible par toi seul), puis récupère-la sur ton téléphone. Le jeton reste uniquement dans ce navigateur. À chaque envoi, la version précédente du cloud est gardée de côté (bouton « Version précédente » si tu t\'es trompé).</p>' +
       '<label class="muted" style="display:block;margin-bottom:6px">Jeton GitHub</label><input type="password" id="syncToken" class="bigsearch" style="max-width:420px" value="' + esc(s.token || '') + '" placeholder="ghp_…" autocomplete="off">' +
       '<div class="toolbar"><button class="btn primary" data-act="sync-push">⬆ Envoyer vers le cloud</button><button class="btn" data-act="sync-pull">⬇ Récupérer depuis le cloud</button><button class="btn" data-act="restore-prev" title="Revenir à la version du cloud d\'avant ton dernier envoi">↩ Version précédente</button></div>' +
-      '<p class="muted" id="syncMsg" style="margin:0">' + syncInfo() + '</p>' +
+      '<p class="muted" id="syncMsg" style="margin:0">' + syncInfo() + '</p>' + weightInfo() +
       '<details class="guide"><summary>Comment créer le jeton (2 minutes)</summary><ol>' +
       '<li>Connecte-toi sur <b>github.com</b> (compte gratuit).</li>' +
       '<li>Ton avatar → <b>Settings</b> → tout en bas <b>Developer settings</b> → <b>Personal access tokens</b> → <b>Tokens (classic)</b> → <b>Generate new token (classic)</b>.</li>' +
@@ -1242,11 +1285,11 @@
   /* Copie « amis » : ce qui n'est pas choisi n'est PAS dans la copie (pas seulement caché) */
   function shareCopy(o) {
     const d = clone(DB);
-    d.commandes = []; d.presets = []; d.lastBackup = 0; d.share = { prix: !!o.prix, wish: !!o.wish, notes: !!o.notes, at: Date.now() };
+    d.commandes = []; d.presets = []; d.lastBackup = 0; delete d.valHist; delete d.histOn; delete d.histStart; d.share = { prix: !!o.prix, wish: !!o.wish, notes: !!o.notes, at: Date.now() };
     Object.keys(d.wishlists).forEach((k) => { if (!o.wish) d.wishlists[k] = []; else d.wishlists[k].forEach((w) => { if (!o.prix) { delete w.prix; delete w.prixMin; delete w.prixMax; } }); });
     d.consoles.forEach((c) => {
       c.machines.forEach((m) => { delete m.achat; delete m.serie; delete m.valeurDate; if (!o.notes) delete m.note; if (!o.prix) delete m.valeur; });
-      c.games.forEach((g) => { ['achat', 'prixAchat', 'anneeAchat', 'prixDate'].forEach((k) => { delete g[k]; }); if (!o.notes) delete g.notes; if (!o.prix) delete g.prixEstime; });
+      c.games.forEach((g) => { ['achat', 'prixAchat', 'anneeAchat', 'prixDate', 'hist'].forEach((k) => { delete g[k]; }); if (!o.notes) delete g.notes; if (!o.prix) delete g.prixEstime; });
     });
     return d;
   }
@@ -1309,7 +1352,8 @@
       if (!d.consoles || !d.wishlists) throw new Error('bad');
       DB = d; normalize(DB); HIDE_PRICE = !(d.share && d.share.prix);
       if (HIDE_PRICE) document.body.classList.add('noprice');
-      $('#app').insertAdjacentHTML('beforebegin', '<div class="robar">👀 Mode lecture seule — tu consultes la collection de Fazerbleu.</div>');
+      if (d.share && d.share.only && DB.wishlists[d.share.only]) { ONLY = d.share.only; document.body.classList.add('only'); if (!/^#\/wish\//.test(location.hash)) location.hash = '#/wish/' + ONLY; }
+      $('#app').insertAdjacentHTML('beforebegin', '<div class="robar">👀 Mode lecture seule — ' + (ONLY ? 'tu consultes la wishlist « ' + esc(wishName(ONLY)) + ' » de Fazerbleu.' : 'tu consultes la collection de Fazerbleu.') + '</div>');
       lastSer = null; router();
     } catch (e) {
       $('#sidebar').innerHTML = '';
@@ -1385,6 +1429,221 @@
       } catch (e) { cb('white'); }
     };
     img.onerror = () => cb('white'); img.src = src;
+  }
+
+  /* ---------- 9l. Tous les jeux, complétion par licence, lot ---------- */
+  const ETAT_FIELDS = ['support', 'boite', 'notice', 'qualite'];
+  const BULK = [['boite', 'Boîte'], ['notice', 'Notice'], ['qualite', 'Qualité globale'], ['support', 'Support (état)'], ['prixEstime', 'Prix estimé (€)'], ['licence', 'Licence / série'], ['platine', 'Terminé à 100 %'], ['special', 'Édition spéciale']];
+  const allLicences = () => [...new Set(DB.consoles.reduce((a, c) => a.concat(c.games.map((g) => g.licence).filter(Boolean)), []))].sort((x, y) => x.localeCompare(y, 'fr'));
+  function selGames() {
+    const out = [];
+    S.sel.forEach((k) => { const [cid, gid] = k.split('|'), c = consoleById(cid), g = c && c.games.find((x) => x.id === gid); if (g) out.push({ c, g }); });
+    return out;
+  }
+  function paintBulk() {
+    const el = $('#bulkbar'); if (!el) return;
+    if (READONLY || !S.sel.size) { el.innerHTML = ''; return; }
+    const f = S.bulkField || 'boite';
+    let val;
+    if (ETAT_FIELDS.indexOf(f) >= 0) val = '<select id="bkVal">' + DB.options.etats.map((x) => '<option>' + esc(x) + '</option>').join('') + '</select>';
+    else if (f === 'prixEstime') val = '<input id="bkVal" type="number" step="0.01" min="0" placeholder="Prix en €">';
+    else if (f === 'licence') val = '<input id="bkVal" list="bkLic" placeholder="Licence"><datalist id="bkLic">' + allLicences().map((x) => '<option value="' + esc(x) + '">').join('') + '</datalist>';
+    else val = '<select id="bkVal"><option value="1">Oui</option><option value="">Non</option></select>';
+    el.innerHTML = '<div class="bulkbar"><b>' + S.sel.size + ' sélectionné' + (S.sel.size > 1 ? 's' : '') + '</b><span>Changer</span><select id="bkField">' + BULK.map((x) => '<option value="' + x[0] + '"' + (x[0] === f ? ' selected' : '') + '>' + x[1] + '</option>').join('') + '</select><span>en</span>' + val +
+      '<button class="btn primary small" data-act="bulk-apply">Appliquer</button><button class="btn danger small" data-act="bulk-del">Supprimer</button><button class="btn small" data-act="bulk-clear">Désélectionner</button></div>';
+  }
+  function bulkApply() {
+    const f = S.bulkField || 'boite', raw = ($('#bkVal') || {}).value || '', list = selGames(); if (!list.length) return;
+    let val = raw;
+    if (f === 'prixEstime') { if (raw === '' || isNaN(Number(raw))) { toast('Entre un prix'); return; } val = Number(raw); }
+    else if (f === 'platine' || f === 'special') val = !!raw;
+    else if (f === 'licence') { val = raw.trim(); if (!val) { toast('Entre une licence'); return; } }
+    snap('Modification en lot de ' + list.length + ' jeu' + (list.length > 1 ? 'x' : ''));
+    let n = 0, skip = 0;
+    list.forEach((x) => {
+      if (ETAT_FIELDS.indexOf(f) >= 0 && isDemat(x.g)) { skip++; return; }
+      x.g[f] = val; if (f === 'prixEstime') x.g.prixDate = Date.now(); n++;
+    });
+    if (f === 'licence' && DB.options.licences.indexOf(val) < 0) DB.options.licences.push(val);
+    S.sel = new Set(); save(); renderNav(); refresh();
+    toast(n + ' jeu' + (n > 1 ? 'x modifiés' : ' modifié') + (skip ? ' (' + skip + ' dématérialisé' + (skip > 1 ? 's' : '') + ' ignoré' + (skip > 1 ? 's' : '') + ')' : ''), true);
+  }
+  function bulkDelete() {
+    const list = selGames(); if (!list.length) return;
+    if (!confirm('Supprimer ces ' + list.length + ' jeux ?')) return;
+    snap('Suppression de ' + list.length + ' jeux');
+    list.forEach((x) => { x.c.games.splice(x.c.games.indexOf(x.g), 1); });
+    S.sel = new Set(); save(); renderNav(); refresh(); toast(list.length + ' jeux supprimés', true);
+  }
+
+  function allView() {
+    const F = S.all, c = F.tab === 'lic';
+    const sel = (key, list, cur, all) => '<select data-fa="' + key + '"><option value="">' + all + '</option>' + list.map((x) => '<option value="' + esc(Array.isArray(x) ? x[0] : x) + '"' + ((Array.isArray(x) ? x[0] : x) === cur ? ' selected' : '') + '>' + esc(Array.isArray(x) ? x[1] : x) + '</option>').join('') + '</select>';
+    let h = '<h2 class="page">Tous les jeux</h2><p class="sub">Toute la collection sur une seule page, toutes consoles confondues.</p>' +
+      '<div class="toolbar"><div class="seg"><button data-act="all-tab" data-t="jeux" class="' + (c ? '' : 'on') + '">Les jeux</button><button data-act="all-tab" data-t="lic" class="' + (c ? 'on' : '') + '">Complétion par licence</button></div></div>';
+    if (c) return h + '<div class="toolbar"><input data-fa="lq" type="search" placeholder="Chercher une licence…" value="' + esc(F.lq) + '"></div><div id="results"></div>';
+    return h + '<div class="toolbar"><input data-fa="q" type="search" placeholder="Chercher (ex. Sonic)…" value="' + esc(F.q) + '">' +
+      sel('cons', orderedConsoles().map((x) => [x.id, x.nom]), F.cons, 'Toutes consoles') + sel('licence', allLicences(), F.licence, 'Toutes licences') +
+      sel('statut', ['Complet', 'Loose', 'Notice manquante', 'Démat'], F.statut, 'Tous statuts') +
+      sel('flag', [['special', '⭐ Éditions spéciales'], ['platine', '🏆 Terminés à 100 %'], ['non', 'Pas encore à 100 %'], ['old', '⏳ Estimations anciennes'], ['notitle', 'Sans titre']], F.flag, 'Tous les jeux') +
+      sel('sort', [['nom', 'Tri : nom'], ['console', 'Tri : console'], ['prix', 'Tri : prix ↓']], F.sort === 'nom' ? '' : F.sort, 'Tri : nom') + '</div><div id="bulkbar"></div><div id="results"></div>';
+  }
+  function allList() {
+    const F = S.all, q = F.q.trim().toLowerCase(), out = [];
+    orderedConsoles().forEach((c) => {
+      if (F.cons && c.id !== F.cons) return;
+      c.games.forEach((g) => {
+        if (F.licence && g.licence !== F.licence) return;
+        if (F.statut && statut(g) !== F.statut) return;
+        if (F.flag === 'special' && !g.special) return;
+        if (F.flag === 'platine' && !g.platine) return;
+        if (F.flag === 'non' && g.platine) return;
+        if (F.flag === 'old' && !isStale(g)) return;
+        if (F.flag === 'notitle' && g.nom) return;
+        if (q && !((g.nom || '') + ' ' + (g.licence || '') + ' ' + (g.version || '') + ' ' + c.nom + ' ' + (READONLY ? '' : (g.notes || ''))).toLowerCase().includes(q)) return;
+        out.push({ c, g });
+      });
+    });
+    if (F.sort === 'nom') out.sort((a, b) => String(a.g.nom || '').localeCompare(String(b.g.nom || ''), 'fr'));
+    else if (F.sort === 'prix') out.sort((a, b) => (Number(b.g.prixEstime) || 0) - (Number(a.g.prixEstime) || 0));
+    return out;
+  }
+  function renderAll() { $('#app').innerHTML = allView(); paintAll(); }
+  function licData() {
+    const m = {}, low = {};
+    DB.consoles.forEach((c) => c.games.forEach((g) => {
+      if (!g.licence) return;
+      const e = m[g.licence] || (m[g.licence] = { n: g.licence, own: 0, cons: new Set(), wish: [] });
+      e.own++; e.cons.add(c.nom); low[g.licence] = g.licence.toLowerCase();
+    }));
+    const names = Object.keys(m); let nw = 0;
+    Object.keys(DB.wishlists).forEach((k) => DB.wishlists[k].forEach((w) => {
+      nw++;
+      const wl = (w.licence || '').toLowerCase(), nm = (w.nom || '').toLowerCase(); let best = null;
+      names.forEach((n) => { const L = low[n]; if (wl ? wl === L : (L.length >= 3 && nm.indexOf(L) >= 0)) { if (!best || L.length > low[best].length) best = n; } });
+      if (best) m[best].wish.push(w.nom || 'Jeu à identifier');
+    }));
+    return { list: Object.keys(m).map((k) => m[k]), nw };
+  }
+  function paintAll() {
+    const res = $('#results'); if (!res) return;
+    const F = S.all;
+    if (F.tab === 'lic') {
+      const d = licData(), q = F.lq.trim().toLowerCase();
+      const list = d.list.filter((e) => !q || e.n.toLowerCase().indexOf(q) >= 0).sort((a, b) => (b.own + b.wish.length) - (a.own + a.wish.length) || a.n.localeCompare(b.n, 'fr'));
+      if (!list.length) { res.innerHTML = '<div class="card">Aucune licence renseignée. Ajoute une « Licence / série » à tes jeux (ou par lot depuis « Les jeux »).</div>'; return; }
+      res.innerHTML = '<p class="muted">Possédés / (possédés + en wishlist). Une ligne de wishlist est rattachée à la licence dont le nom apparaît dans son titre.</p><div class="licgrid">' + list.map((e) => {
+        const tot = e.own + e.wish.length, pct = tot ? Math.round(e.own / tot * 100) : 100;
+        return '<div class="licrow" data-act="all-lic" data-l="' + esc(e.n) + '" title="Voir ces jeux"><div class="licname"><b>' + esc(e.n) + '</b><small>' + esc([...e.cons].join(' · ')) + '</small></div>' +
+          '<div class="licbar"><i style="width:' + pct + '%"></i></div><div class="licnum"><b>' + e.own + '</b> possédé' + (e.own > 1 ? 's' : '') + (d.nw ? ' · <span class="' + (e.wish.length ? 'goldtxt' : 'muted') + '">' + e.wish.length + ' en wishlist</span> · ' + pct + ' %' : '') + '</div>' +
+          (e.wish.length ? '<div class="licwish">À trouver : ' + esc(e.wish.slice(0, 4).join(', ')) + (e.wish.length > 4 ? '…' : '') + '</div>' : '') + '</div>';
+      }).join('') + '</div>';
+      return;
+    }
+    const list = allList(), shown = list.slice(0, S.allLimit);
+    const q = list.reduce((s, x) => s + (Number(x.g.quantite) || 1), 0), v = list.reduce((s, x) => s + (Number(x.g.prixEstime) || 0) * (Number(x.g.quantite) || 1), 0);
+    let h = '<p class="muted">' + list.length + ' lignes · ' + q + ' exemplaires' + (HIDE_PRICE ? '' : ' · valeur estimée ' + eur(v)) + '</p>';
+    if (!list.length) { res.innerHTML = h + '<div class="card">Aucun jeu ne correspond.</div>'; S.curKeys = []; paintBulk(); return; }
+    h += '<div class="tablewrap"><table><thead><tr>' + (READONLY ? '' : '<th class="chk"><input type="checkbox" data-selall title="Tout sélectionner (les ' + list.length + ' jeux)"></th>') + '<th>Jeu</th><th>Console</th><th>Statut</th><th>Qualité</th><th>Qté</th>' + (HIDE_PRICE ? '' : '<th>Estimé</th>') + '<th>Licence</th></tr></thead><tbody>';
+    shown.forEach((x) => {
+      const g = x.g, c = x.c;
+      h += '<tr class="' + rowClass(g).trim() + '" data-act="view-game" data-c="' + c.id + '" data-id="' + g.id + '" style="cursor:pointer">' + (READONLY ? '' : '<td class="chk"><input type="checkbox" data-sel="' + c.id + '|' + g.id + '"' + (S.sel.has(c.id + '|' + g.id) ? ' checked' : '') + '></td>') +
+        '<td><div class="tcell">' + cover(g, 'sm') + '<span class="title">' + gameTitle(g) + gameIcons(g) + '</span></div></td><td>' + esc(c.nom) + '</td><td>' + pill(statut(g)) + '</td><td>' + pill(g.qualite) + '</td><td class="n">' + g.quantite + '</td>' +
+        (HIDE_PRICE ? '' : '<td class="n">' + eur(g.prixEstime) + '</td>') + '<td>' + esc(g.licence) + '</td></tr>';
+    });
+    h += '</tbody></table></div>' + (list.length > shown.length ? '<div class="toolbar"><button class="btn" data-act="all-more">Afficher la suite (' + (list.length - shown.length) + ' restants)</button></div>' : '');
+    res.innerHTML = h; S.curKeys = list.map((x) => x.c.id + '|' + x.g.id); paintBulk();
+  }
+
+  /* ---------- 9m. Historique des prix ---------- */
+  function histCard() {
+    const n = (DB.valHist || []).length;
+    return '<div class="card"><h3>📈 Historique des prix</h3><p class="muted" style="margin:0 0 10px">Garde chaque estimation avec sa date et trace la courbe de la valeur de ta collection (Statistiques). L\'historique commence à l\'activation : il ne peut pas remonter dans le passé.</p>' +
+      (DB.histOn ? '<p style="margin:0 0 8px">✅ <b>Actif</b> depuis le ' + fdate(DB.histStart) + ' · ' + n + ' point' + (n > 1 ? 's' : '') + ' sur la courbe.</p><div class="toolbar" style="margin-top:0"><button class="btn" data-act="hist-off">Mettre en pause</button><button class="btn danger" data-act="hist-clear">Effacer l\'historique</button></div>'
+        : '<div class="toolbar" style="margin-top:0"><button class="btn primary" data-act="hist-on">Activer l\'historique</button>' + (n ? '<button class="btn danger" data-act="hist-clear">Effacer l\'historique</button>' : '') + '</div>' + (n ? '<p class="muted" style="margin:8px 0 0">En pause : ' + n + ' points conservés.</p>' : '')) + '</div>';
+  }
+  function lineSvg(pts) {
+    const W = 640, H = 200, L = 58, R = 14, T = 14, B = 28;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    pts.forEach((p) => { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; });
+    if (y1 === y0) { y1 += 1; y0 = Math.max(0, y0 - 1); }
+    const pad = (y1 - y0) * 0.08; y0 = Math.max(0, y0 - pad); y1 += pad;
+    const sx = (t) => L + (W - L - R) * ((t - x0) / ((x1 - x0) || 1)), sy = (v) => T + (H - T - B) * (1 - (v - y0) / (y1 - y0));
+    const path = pts.map((p, i) => (i ? 'L' : 'M') + sx(p[0]).toFixed(1) + ' ' + sy(p[1]).toFixed(1)).join('');
+    return '<svg class="hist" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Évolution de la valeur estimée"><line x1="' + L + '" y1="' + (H - B) + '" x2="' + (W - R) + '" y2="' + (H - B) + '" stroke="var(--line)"/>' +
+      '<text x="' + (L - 6) + '" y="' + (T + 4) + '" text-anchor="end">' + eur(y1) + '</text><text x="' + (L - 6) + '" y="' + (H - B) + '" text-anchor="end">' + eur(y0) + '</text>' +
+      '<text x="' + L + '" y="' + (H - 8) + '">' + fdate(x0) + '</text><text x="' + (W - R) + '" y="' + (H - 8) + '" text-anchor="end">' + fdate(x1) + '</text>' +
+      '<path d="' + path + '" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round"/>' + (pts.length <= 40 ? pts.map((p) => '<circle cx="' + sx(p[0]).toFixed(1) + '" cy="' + sy(p[1]).toFixed(1) + '" r="3.5" fill="var(--accent)"><title>' + fdate(p[0]) + ' : ' + eur(p[1]) + '</title></circle>').join('') : '') + '</svg>';
+  }
+  function histChart() {
+    if (HIDE_PRICE || READONLY) return '';
+    const vh = DB.valHist || [];
+    if (vh.length >= 2) {
+      const first = vh[0], last = vh[vh.length - 1], dlt = last[1] - first[1];
+      return '<div class="card"><h3>Évolution de la valeur estimée</h3>' + lineSvg(vh) + '<p class="muted" style="margin:6px 0 0">Depuis le ' + fdate(first[0]) + ' : <b>' + (dlt >= 0 ? '+' : '') + eur(dlt) + '</b> (de ' + eur(first[1]) + ' à ' + eur(last[1]) + ').</p></div>';
+    }
+    return '<div class="card"><h3>Évolution de la valeur estimée</h3><p class="muted" style="margin:0">' + (DB.histOn ? 'Historique actif : la courbe apparaîtra dès que tes estimations changeront (par exemple après un import de prix).' : 'Active « l\'historique des prix » dans les Paramètres pour tracer la courbe de la valeur de ta collection.') + '</p></div>';
+  }
+  const histList = (g) => (HIDE_PRICE || !g.hist || g.hist.length < 2) ? '' : '<p class="muted" style="margin:8px 0 0">Historique : ' + g.hist.slice(-6).map((h) => fdate(h[0]) + ' <b>' + eur(h[1]) + '</b>').join(' → ') + '</p>';
+
+  /* ---------- 9n. Partager une seule wishlist ---------- */
+  const wishShareId = (k) => (sync().wishShares || {})[k] || null;
+  const wishShareUrl = (k) => { const id = wishShareId(k); return id ? location.origin + location.pathname + '?lecture=' + id : ''; };
+  function wishShareDialog(k) {
+    const u = wishShareUrl(k), web = /^https?:/.test(location.protocol), n = DB.wishlists[k].length;
+    showModal('Partager « ' + wishName(k) + ' »',
+      '<p class="muted" style="margin-top:0">Crée un lien en lecture seule qui ne montre <b>que cette liste</b> (' + n + ' jeu' + (n > 1 ? 'x' : '') + '), sans ta collection ni tes autres listes. Idéal pour la famille à Noël.</p>' +
+      '<label class="muted" style="display:block;margin:6px 0"><input type="checkbox" id="wsPrix"' + (sync().wsPrix ? ' checked' : '') + '> Montrer les prix de cette liste</label>' +
+      '<div class="toolbar"><button class="btn primary" data-act="wshare-pub" data-k="' + k + '">' + (u ? '⟳ Mettre à jour le lien' : '🔗 Créer le lien') + '</button>' + (u ? '<button class="btn" data-act="wshare-copy" data-k="' + k + '">📋 Copier</button><button class="btn danger" data-act="wshare-stop" data-k="' + k + '">Arrêter ce partage</button>' : '') + '</div>' +
+      (u ? '<input id="wsLink" class="bigsearch" readonly value="' + esc(u) + '" onclick="this.select()">' : '') + (web ? '' : '<p class="muted">⚠️ Utilise l\'adresse en ligne du site (https://…) pour obtenir un lien valable.</p>') +
+      '<p class="muted" id="wsMsg" style="margin:6px 0 0">Après avoir modifié la liste, clique sur « Mettre à jour » pour que les autres voient les changements.</p>');
+  }
+  async function wishSharePublish(k) {
+    const msg = (t) => { const m = $('#wsMsg'); if (m) m.textContent = t; };
+    try {
+      syncSaveToken(); if (!sync().token) throw new Error('Enregistre d\'abord ton jeton GitHub (Paramètres → Synchronisation).');
+      const prix = !!($('#wsPrix') && $('#wsPrix').checked); setSync({ wsPrix: prix }); msg('Publication en cours…');
+      const list = clone(DB.wishlists[k]); if (!prix) list.forEach((w) => { delete w.prix; delete w.prixMin; delete w.prixMax; });
+      const d = { version: DB.version, rev: DB.rev, consoles: [], commandes: [], presets: [], options: clone(DB.options), wishNames: {}, wishlists: {}, share: { prix, wish: true, notes: false, only: k, at: Date.now() } };
+      d.wishlists[k] = list; d.wishNames[k] = wishName(k);
+      const body = { description: 'Wishlist Fazerbleu (partage en lecture seule)', files: {} }; body.files[SHARE_FILE] = { content: JSON.stringify(d) };
+      const ws = Object.assign({}, sync().wishShares || {}), id = ws[k];
+      if (id) { try { await gh('/gists/' + id, { method: 'PATCH', body: JSON.stringify(body) }); } catch (e) { if (/404/.test(e.message)) { delete ws[k]; setSync({ wishShares: ws }); return wishSharePublish(k); } throw e; } }
+      else { body.public = false; const g = await gh('/gists', { method: 'POST', body: JSON.stringify(body) }); ws[k] = g.id; setSync({ wishShares: ws }); }
+      closeModal(); wishShareDialog(k); toast('Lien prêt : copie-le pour l\'envoyer');
+    } catch (e) { msg(e.message); toast(e.message); }
+  }
+  async function wishShareStop(k) {
+    if (!confirm('Arrêter ce partage ? Le lien ne fonctionnera plus.')) return;
+    const ws = Object.assign({}, sync().wishShares || {}), id = ws[k];
+    try { if (id) await gh('/gists/' + id, { method: 'DELETE' }); } catch (e) { if (!/404/.test(e.message)) { toast(e.message); return; } }
+    delete ws[k]; setSync({ wishShares: ws }); closeModal(); toast('Partage de la liste arrêté');
+  }
+
+  /* ---------- 9k. À propos : version, nouveautés, guide ---------- */
+  function aboutView() {
+    const g = (t, body) => '<details class="guide"><summary>' + t + '</summary>' + body + '</details>';
+    const log = [
+      ['1.0', 'Annuler une suppression ou une opération groupée · vérification de la dernière version à chaque ouverture · page À propos · vue « Tous les jeux » · complétion par licence · modification en lot · historique des prix · partage d\'une seule wishlist'],
+      ['0.9', 'Vue Tranches · wishlists modifiables avec Vitrine · compléter les titres · alerte doublons · frise déplaçable · bandeau « version plus récente » · version précédente dans le cloud · Brocante pour les amis · filtres en liste · Paramètres repliables'],
+      ['0.8', 'Stockage IndexedDB (plus de limite de 5 Mo) · rappel d\'envoi · lien de partage en lecture seule · version publique sans données'],
+      ['0.7', 'Jeux dématérialisés et onglets · Game-Key Card · ordre des consoles · logos agrandis'],
+      ['0.6', 'Mode clair · fiche vitrine · Brocante · accès depuis le téléphone · jaquettes adaptatives'],
+      ['0.5', 'Statistiques · impression · « Acheté ! » depuis la wishlist · filtres enregistrés · import de prix · sauvegarde automatique'],
+      ['0.1 – 0.4', 'Tableau de bord, consoles, jeux, wishlists, commandes, recherche, thème sombre'],
+    ];
+    return '<h2 class="page">À propos</h2>' +
+      '<div class="card aboutcard"><div class="aboutv"><b>Collection Fazerbleu</b><span class="pill e-parfait">version ' + esc(APP_VERSION) + '</span></div>' +
+      '<p class="muted" style="margin:6px 0 0">Application personnelle pour gérer une collection de jeux vidéo. Tes données restent dans ton navigateur (' + (useIdb ? 'IndexedDB' : 'stockage local') + ') et dans ton cloud privé : le site lui-même n\'en contient aucune.</p></div>' +
+      '<div class="card"><h3>Nouveautés</h3>' + log.map((x) => '<div class="chlog"><b>' + x[0] + '</b><span>' + esc(x[1]) + '</span></div>').join('') + '</div>' +
+      '<div class="card"><h3>Petit guide</h3>' +
+      g('Ajouter un jeu', '<p class="muted">« Nouveau jeu » en haut à droite, ou « Ajouter un jeu » dans une console. Coche « Dématérialisé » pour un jeu sans support physique. Les 92 jeux sans titre se complètent vite dans « Compléter les titres » (menu de gauche).</p>') +
+      g('Synchroniser ordinateur et téléphone', '<p class="muted">Paramètres → Synchronisation : colle ton jeton GitHub une fois. Après une séance de saisie sur l\'ordinateur, clique sur « Envoyer ». Sur le téléphone, ouvre l\'appli : si le cloud est plus récent, un bandeau te propose de « Récupérer ». Saisis plutôt sur un seul appareil à la fois pour éviter d\'écraser tes ajouts.</p>') +
+      g('Partager avec des amis', '<p class="muted">Paramètres → « Partager avec mes amis » crée un lien en lecture seule (sans prix d\'achat, numéros de série ni commandes). Sur une page de wishlist, « Partager cette liste » crée un lien qui ne montre que cette liste. Le lien se coupe en un clic.</p>') +
+      g('Sauvegarder et annuler', '<p class="muted">Fais de temps en temps « Exporter tout (JSON) » : c\'est ta sauvegarde indépendante. Après une suppression, le bouton « Annuler » reste à l\'écran quelques secondes (ou Ctrl + Z) et la vue d\'ensemble garde l\'annulation de la dernière action. Le cloud garde aussi la version précédente.</p>') +
+      g('Installer sur le téléphone', '<p class="muted">Ouvre l\'adresse du site dans le navigateur, puis « Ajouter à l\'écran d\'accueil ». L\'appli fonctionne ensuite comme une application, même avec un réseau faible.</p>') +
+      g('Mises à jour de l\'application', '<p class="muted">Le site vérifie sa dernière version à chaque ouverture. Quand une nouvelle version est prête, une bannière « Nouvelle version disponible » apparaît : clique sur « Actualiser ». Tes données ne sont jamais touchées par une mise à jour.</p>') +
+      '</div>';
   }
 
   /* ---------- 9j. Frise déplaçable, Paramètres repliables, compléter les titres, doublons ---------- */
@@ -1500,13 +1759,14 @@
   }
 
   /* ---------- 13. Événements ---------- */
-  function refresh() { const v = route()[0]; if (v === 'console') { $('#app').innerHTML = consoleView(consoleById(route()[1])); paintConsole(); } else router(); }
-  const delConfirm = (msg, fn) => { if (confirm(msg)) { fn(); save(); closeModal(); renderNav(); refresh(); } };
+  function refresh() { const v = route()[0]; if (v === 'console') { $('#app').innerHTML = consoleView(consoleById(route()[1])); paintConsole(); } else if (v === 'all') paintAll(); else router(); }
+  const delConfirm = (msg, fn) => { if (confirm(msg)) { snap(msg.replace(/\s*\?$/, '')); fn(); save(); closeModal(); renderNav(); refresh(); toast('Supprimé', true); } };
 
   document.addEventListener('click', (e) => {
+    if (e.target.closest('.chk')) return;
     const t = e.target.closest('[data-act]'); if (!t) return;
     const d = t.dataset;
-    if (READONLY && ['mode', 'sort', 'zoom', 'view-game', 'vswap', 'open-vitrine', 'tab', 'wmode', 'view-wish', 'preset'].indexOf(d.act) < 0) { e.preventDefault(); return; }
+    if (READONLY && ['mode', 'sort', 'zoom', 'view-game', 'vswap', 'open-vitrine', 'tab', 'wmode', 'view-wish', 'preset', 'all-tab', 'all-lic', 'all-more'].indexOf(d.act) < 0) { e.preventDefault(); return; }
     if (t.tagName === 'A' && (d.act === 'view-game' || d.act === 'view-wish')) e.preventDefault();
     switch (d.act) {
       case 'mode': S.mode = d.m; refresh(); break;
@@ -1530,7 +1790,21 @@
       case 'export-json': DB.lastBackup = Date.now(); save(); download('collection-fazerbleu-' + new Date().toISOString().slice(0, 10) + '.json', JSON.stringify(DB, null, 1)); toast('Sauvegarde téléchargée'); if (['dashboard', 'settings', ''].indexOf(route()[0]) >= 0) router(); break;
       case 'export-csv': exportCsv(d.id); break;
       case 'del-legacy': try { localStorage.removeItem(KEY); } catch (err) { /* ignore */ } router(); toast('Ancienne copie supprimée'); break;
-      case 'reset': if (confirm('Effacer toutes tes modifications et revenir aux données de départ ?')) { try { localStorage.removeItem(KEY); } catch (err) { /* ignore */ } DB = clone(INITIAL_DATA); normalize(DB); lastSer = null; save(); router(); toast('Données réinitialisées'); } break;
+      case 'reset': if (confirm('Effacer toutes tes modifications et revenir aux données de départ ?')) { snap('Retour aux données de départ'); try { localStorage.removeItem(KEY); } catch (err) { /* ignore */ } DB = clone(INITIAL_DATA); normalize(DB); lastSer = null; save(); router(); toast('Données réinitialisées', true); } break;
+      case 'undo': undo(); break;
+      case 'all-tab': S.all.tab = d.t; renderAll(); break;
+      case 'all-lic': S.all = Object.assign({}, S.all, { q: '', cons: '', statut: '', flag: '', licence: d.l, tab: 'jeux' }); S.allLimit = 200; renderAll(); break;
+      case 'all-more': S.allLimit += 300; paintAll(); break;
+      case 'bulk-clear': S.sel = new Set(); { const v = route()[0]; if (v === 'all') paintAll(); else paintConsole(); } break;
+      case 'bulk-apply': bulkApply(); break;
+      case 'bulk-del': bulkDelete(); break;
+      case 'hist-on': DB.histOn = true; DB.histStart = Date.now(); save(); router(); toast('Historique activé : les prochains changements de prix seront gardés'); break;
+      case 'hist-off': DB.histOn = false; save(); router(); toast('Historique mis en pause'); break;
+      case 'hist-clear': if (confirm('Effacer tout l\'historique des prix ?')) { snap('Effacement de l\'historique des prix'); DB.consoles.forEach((c) => c.games.forEach((g) => { delete g.hist; })); DB.valHist = []; save(); router(); toast('Historique effacé', true); } break;
+      case 'wshare': wishShareDialog(d.k); break;
+      case 'wshare-pub': wishSharePublish(d.k); break;
+      case 'wshare-copy': { const u = wishShareUrl(d.k); if (u) { const i = $('#wsLink'); const done = () => toast('Lien copié'); if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(u).then(done, () => { i.select(); document.execCommand('copy'); done(); }); else { i.select(); document.execCommand('copy'); done(); } } break; }
+      case 'wshare-stop': wishShareStop(d.k); break;
       case 'buy-wish': buyItem('wish', d.k, d.id); break;
       case 'buy-order': buyItem('order', null, d.id); break;
       case 'preset': {
@@ -1574,7 +1848,7 @@
         }); break;
       case 'del-wishlist': {
         const n = (DB.wishlists[d.k] || []).length;
-        if (confirm('Supprimer la wishlist « ' + wishName(d.k) + ' »' + (n ? ' et ses ' + n + ' jeux' : '') + ' ?')) { delete DB.wishlists[d.k]; delete DB.wishNames[d.k]; save(); location.hash = '#/dashboard'; renderNav(); toast('Wishlist supprimée'); }
+        if (confirm('Supprimer la wishlist « ' + wishName(d.k) + ' »' + (n ? ' et ses ' + n + ' jeux' : '') + ' ?')) { snap('Suppression de la wishlist ' + wishName(d.k)); delete DB.wishlists[d.k]; delete DB.wishNames[d.k]; save(); location.hash = '#/dashboard'; renderNav(); toast('Wishlist supprimée', true); }
         break;
       }
       case 'cloudbar-pull': { const b = document.getElementById('cloudbar'); if (b) b.remove(); cloudPull(); break; }
@@ -1596,6 +1870,7 @@
     const t = e.target;
     if (t.id === 'globalSearch') return search(t.value);
     if (t.dataset && t.dataset.f) { S.filters[route()[1]][t.dataset.f] = t.value; paintConsole(); }
+    if (t.dataset && t.dataset.fa && t.tagName === 'INPUT') { S.all[t.dataset.fa] = t.value; S.allLimit = 200; paintAll(); }
     if (t.id === 'wishQ') paintWish();
     if (t.id === 'orderQ') paintOrders();
     if (t.id === 'checkQ') paintCheck();
@@ -1603,6 +1878,10 @@
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (t.dataset && t.dataset.f) { S.filters[route()[1]][t.dataset.f] = t.value; paintConsole(); }
+    if (t.dataset && t.dataset.fa && t.tagName === 'SELECT') { S.all[t.dataset.fa] = t.value; S.allLimit = 200; paintAll(); }
+    if (t.dataset && t.dataset.sel) { if (t.checked) S.sel.add(t.dataset.sel); else S.sel.delete(t.dataset.sel); paintBulk(); }
+    if (t.dataset && t.dataset.selall !== undefined) { S.curKeys.forEach((k) => { if (t.checked) S.sel.add(k); else S.sel.delete(k); }); const v = route()[0]; if (v === 'all') paintAll(); else paintConsole(); }
+    if (t.id === 'bkField') { S.bulkField = t.value; paintBulk(); }
     if (t.id === 'presetSel' && t.value) {
       const v = t.value, p = v[0] === 'b' ? BUILTIN_PRESETS[Number(v.slice(1))] : (DB.presets.find((x) => x.id === v.slice(1)) || {}).f;
       S.filters[route()[1]] = Object.assign({ q: '', statut: '', licence: '', flag: '' }, p || {}); refresh();
@@ -1616,7 +1895,7 @@
     if (t.id === 'importFile' && t.files[0] && !READONLY) {
       const r = new FileReader();
       r.onload = () => {
-        try { const d = JSON.parse(r.result); if (!d.consoles || !d.wishlists) throw 0; DB = migrate(d); normalize(DB); save(); router(); toast('Import réussi'); }
+        try { const d = JSON.parse(r.result); if (!d.consoles || !d.wishlists) throw 0; snap('Import d\'un fichier'); DB = migrate(d); normalize(DB); save(); renderNav(); router(); toast('Import réussi', true); }
         catch (err) { toast('Fichier invalide'); }
       };
       r.readAsText(t.files[0]);
@@ -1626,6 +1905,7 @@
   $('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') closeModal(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeModal();
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z') && UNDO && !READONLY && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '')) { e.preventDefault(); undo(); }
     if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('tinput')) {
       e.preventDefault();
       const all = [...document.querySelectorAll('.tinput')], i = all.indexOf(e.target); e.target.blur();
@@ -1644,7 +1924,10 @@
   new MutationObserver(() => { adaptAll(); if (HIDE_PRICE) stripPriceCols(); }).observe($('#app'), { childList: true, subtree: true });
   if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) {
     const had = !!navigator.serviceWorker.controller;
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+      reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+    }).catch(() => {});
     navigator.serviceWorker.addEventListener('controllerchange', () => { /* nouvelle version du site prête */
       if (!had || document.getElementById('updbar')) return;
       document.body.insertAdjacentHTML('beforeend', '<div id="updbar" class="updbar">✨ Nouvelle version disponible <button class="btn small primary" id="updBtn">Actualiser</button></div>');
