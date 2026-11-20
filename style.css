@@ -682,3 +682,19 @@ td.chk,th.chk{width:34px;text-align:center}
 svg.hist{width:100%;height:auto;display:block}
 svg.hist text{fill:var(--muted);font-size:11px}
 body.only #globalSearch{display:none}
+
+/* Monochrome : « flat » = logo d'une seule teinte (silhouette), « detail » = logo avec des détails clairs/foncés (contraste renforcé) */
+.logo.mono.flat img,.tlogo.mono.flat img{filter:brightness(0) invert(1)}
+html[data-theme=light] .logo.mono.flat img,html[data-theme=light] .tlogo.mono.flat img{filter:brightness(0)}
+.logo.mono.detail img,.tlogo.mono.detail img{filter:grayscale(1) contrast(6) invert(1)}
+.logo.mono.detail.lt img,.tlogo.mono.detail.lt img{filter:grayscale(1) contrast(6)}
+html[data-theme=light] .logo.mono.detail img,html[data-theme=light] .tlogo.mono.detail img{filter:grayscale(1) contrast(6)}
+html[data-theme=light] .logo.mono.detail.lt img,html[data-theme=light] .tlogo.mono.detail.lt img{filter:grayscale(1) contrast(6) invert(1)}
+
+/* V1.1 : colonne des cases à cocher resserrée */
+table td.chk,table th.chk{width:1%;min-width:0;padding:0 4px;white-space:nowrap;text-align:center}
+td.chk input,th.chk input{margin:0;width:15px;height:15px;vertical-align:middle}
+
+.spine.has-img{background-size:100% 100%;background-repeat:no-repeat;background-position:center;background-color:#222}
+.dsec.linkbox{border-color:var(--accent)}
+.dsec.linkbox a{color:var(--accent);font-weight:600}
