@@ -11,7 +11,7 @@
   const KEY = 'fazerbleu-collection-v1';
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const uid = () => Math.random().toString(36).slice(2, 10);
-  const APP_VERSION = '1.1.0';
+  const APP_VERSION = '1.2.0';
   let READONLY = false, HIDE_PRICE = false, ONLY = null; /* lien de partage : lecture seule, prix masqués ou non */
 
   /* V8 : les données vivent dans IndexedDB (des centaines de Mo) et non plus dans localStorage (~5 Mo).
@@ -125,14 +125,14 @@
     Object.values(d.wishlists).forEach((l) => l.forEach((w) => { if (!w.id) w.id = uid(); }));
     d.commandes.forEach((x) => { if (!x.id) x.id = uid(); });
     d.presets = d.presets || []; d.lastBackup = d.lastBackup || 0; d.modified = d.modified || 0;
-    d.orderMode = d.orderMode || 'auto'; if (d.logoStyle !== 'white' && d.logoStyle !== 'black' && d.logoStyle !== 'mono') d.logoStyle = 'white';
+    d.orderMode = d.orderMode || 'auto'; if (d.logoV !== 2) { d.logoV = 2; d.logoStyle = 'auto'; } if (['auto', 'white', 'black', 'mono'].indexOf(d.logoStyle) < 0) d.logoStyle = 'auto';
     const DEFAULT_WISH = { general: 'Générale', sonic: 'Sonic Full FR', zelda: 'Zelda' };
     d.wishNames = d.wishNames || {};
     Object.keys(d.wishlists).forEach((k) => { if (!d.wishNames[k]) d.wishNames[k] = DEFAULT_WISH[k] || 'Ma liste'; });
     if (!d.brandOrder) d.brandOrder = [...new Set(d.consoles.map((c) => c.marque))];
     d.consoles.forEach((c) => {
       const m = CONSOLE_META[c.id] || guessMeta(c.nom);
-      if (c.logoBgMode !== 'white' && c.logoBgMode !== 'black' && c.logoBgMode !== 'mono') c.logoBgMode = (c.logoTone === 'black' || c.id === 'saturn') ? 'black' : '';
+      if (['auto', 'white', 'black', 'mono'].indexOf(c.logoBgMode) < 0) c.logoBgMode = (c.logoTone === 'black' || c.id === 'saturn') ? 'black' : '';
       { const BC = { Nintendo: '#e4372c', SEGA: '#7d8494', PlayStation: '#2f7bff', Xbox: '#2faa3f' }; if (BC[c.marque]) c.couleur = BC[c.marque]; }
       if (c.logoBgAuto === undefined) c.logoBgAuto = !!(c.logoTone || c.id === 'saturn'); /* fond choisi automatiquement : le mode Monochrome peut le remplacer */
       if (!c.type) c.type = m.type;
@@ -280,12 +280,13 @@
   const orderedConsoles = () => [].concat(...brandList().map(consolesOf));
   const LOGO_BGS = { white: '#ffffff', black: '#0f1117' }; /* le noir = couleur du fond du site */
   const isSwitch2 = (c) => /switch\s*2/i.test(c.nom);
+  const isPS5 = (c) => /(ps\s*5|playstation\s*5)/i.test(c.nom);
   const isDemat = (g) => g.support === 'Démat';
   /* Logo monochrome : blanc en mode sombre, noir en mode clair (seulement si l'image a un fond transparent) */
   const ALPHA = {};
-  const logoMode = (c) => (c.logoBgAuto && DB.logoStyle === 'mono') ? 'mono' : (c.logoBgMode || DB.logoStyle);
+  const logoMode = (c) => (c.logoBgAuto && (DB.logoStyle === 'mono' || DB.logoStyle === 'auto')) ? DB.logoStyle : (c.logoBgMode || DB.logoStyle);
   function logoIsMono(c) {
-    if (logoMode(c) !== 'mono' || !c.logo) return false;
+    const lm = logoMode(c); if ((lm !== 'mono' && lm !== 'auto') || !c.logo) return false;
     const src = c.logo;
     if (ALPHA[src] === undefined) {
       ALPHA[src] = null;
@@ -301,15 +302,20 @@
           if (t / (w * h) > 0.1 && n) { const m = sum / n, sd = Math.sqrt(Math.max(0, sq / n - m * m)); ok = (sd < 38 ? 'f' : 'd') + (m >= 128 ? 'l' : 'd'); } else ok = false;
         } catch (e) { ok = 'd'; }
         ALPHA[src] = ok;
-        { clearTimeout(logoIsMono.t); logoIsMono.t = setTimeout(() => { renderNav(); if (route()[0] !== 'game') router(); }, 120); }
+        { clearTimeout(logoIsMono.t); logoIsMono.t = setTimeout(() => { renderNav(); const ae = document.activeElement; if (route()[0] !== 'game' && !(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) && !FORM_OPEN) router(); }, 120); }
       };
       img.onerror = () => { ALPHA[src] = false; };
       img.src = src;
     }
     return ALPHA[src] !== false;
   }
-  const monoCls = (c) => logoIsMono(c) ? ' mono ' + ((ALPHA[c.logo] || 'dd')[0] === 'f' ? 'flat' : 'detail') + ((ALPHA[c.logo] || 'dd')[1] === 'l' ? ' lt' : '') : '';
-  function logoBg(c) { if (logoIsMono(c)) return 'transparent'; const md = logoMode(c), m = md === 'mono' ? 'white' : md; return LOGO_BGS[m] || LOGO_BGS.white; }
+  const monoCls = (c) => {
+    if (!logoIsMono(c)) return '';
+    const t = ALPHA[c.logo] || 'dd';
+    if (logoMode(c) === 'auto') return ' lauto ' + (t[1] === 'l' ? 'ltone' : 'dtone');
+    return ' mono ' + (t[0] === 'f' ? 'flat' : 'detail') + (t[1] === 'l' ? ' lt' : '');
+  };
+  function logoBg(c) { const md = logoMode(c); if (md === 'mono' && logoIsMono(c)) return 'transparent'; if (md === 'auto' && logoIsMono(c)) return ''; const m = (md === 'mono' || md === 'auto') ? 'white' : md; return LOGO_BGS[m] || LOGO_BGS.white; }
   const tabOf = (c) => S.tab[c.id] || (c.games.some((g) => !isDemat(g)) || !c.games.some(isDemat) ? 'phys' : 'demat');
   const consoleById = (id) => DB.consoles.find((c) => c.id === id);
   const route = () => (location.hash || '#/dashboard').slice(2).split('/');
@@ -390,9 +396,9 @@
     recent.sort((a, b) => b.g.ajoute - a.g.ajoute);
 
     let h = '<h2 class="page">Vue d\'ensemble</h2><p class="sub">' + DB.consoles.length + ' consoles · ' + sum((k) => k.total) + ' jeux</p>';
-    if (missing && !READONLY) h += '<div class="notice">⚠️ <b>' + missing + ' jeux n\'ont pas encore de titre.</b> <a class="btn small primary" href="#/titles" style="margin-left:8px">✏️ Compléter les titres</a></div>';
+    if (missing && !READONLY) h += '<div class="notice nrow"><span>⚠️ <b>' + missing + ' jeux n\'ont pas encore de titre.</b></span><a class="btn small primary" href="#/titles">✏️ Compléter les titres</a></div>';
     const dg = READONLY ? [] : dupGroups();
-    if (dg.length) h += '<details class="notice dupes"><summary>🔁 <b>' + dg.length + ' doublon' + (dg.length > 1 ? 's' : '') + ' possible' + (dg.length > 1 ? 's' : '') + '</b> (même jeu dans une console, y compris en édition Choix des joueurs, Platinum, Essentials…). Pour deux exemplaires identiques, utilise plutôt la quantité.</summary><ul>' +
+    if (dg.length) h += '<details class="notice dupes"><summary>🔁 <b>' + dg.length + ' doublon' + (dg.length > 1 ? 's' : '') + ' possible' + (dg.length > 1 ? 's' : '') + '</b> (même jeu dans une console, y compris en édition Choix des joueurs, Platinum, Essentials…). Pour un 2e exemplaire, utilise « Ajouter un autre exemplaire » dans la fiche du jeu (ou la quantité si l\'état est identique).</summary><ul>' +
       dg.slice(0, 30).map(({ c, l, labels, same }) => '<li><a href="#/console/' + c.id + '">' + esc(c.nom) + '</a> · ' + esc(l[0].nom) + ' : ' + l.length + ' lignes' +
         (same ? ' <button class="btn small" data-act="merge-dup" data-c="' + c.id + '" data-ids="' + l.map((x) => x.id).join(',') + '">Fusionner (quantité ' + l.reduce((a, x) => a + (Number(x.quantite) || 1), 0) + ')</button>' : ' <span class="muted">— éditions différentes : ' + esc(labels.join(' / ')) + '</span>') +
         '<br>' + l.map((x, i) => '<a class="muted" href="#/game/' + c.id + '/' + x.id + '">' + esc(labels[i]) + '</a>').join(' · ') + '</li>').join('') + '</ul></details>';
@@ -535,13 +541,36 @@
   }
 
   const gameTitle = (g) => g.nom ? esc(g.nom) : '<span class="muted">Titre à renseigner</span>';
-  const gameIcons = (g) => (g.lien ? ' <span class="ico" title="Débloqué grâce à un autre jeu">🔗</span>' : '') + (g.special ? ' <span class="ico gold" title="Édition spéciale">⭐</span>' : '') + (g.platine ? ' <span class="ico plat" title="Terminé à 100 %">🏆</span>' : '') + (g.gamekey ? ' <span class="ico key" title="Game-Key Card : la cartouche ne contient que la clé de téléchargement">🔑</span>' : '');
+  const gameIcons = (g) => (g.exemplaire ? ' <span class="pill exp" title="Exemplaire">' + esc(g.exemplaire) + '</span>' : '') + (g.lien ? ' <span class="ico" title="Débloqué grâce à un autre jeu">🔗</span>' : '') + (g.special ? ' <span class="ico gold" title="Édition spéciale">⭐</span>' : '') + (g.platine ? ' <span class="ico plat" title="Terminé à 100 %">🏆</span>' : '') + (g.gamekey ? ' <span class="ico key" title="Game-Key Card : la cartouche ne contient que la clé de téléchargement">🔑</span>' : '');
 
+  const SPINE_BOX = [32, 216], SPINE_IMG = [64, 432];
+  /* Tranche normalisée : taille fixe, photo non déformée, marges prolongées avec les bords de la photo */
+  function fitSpine(src, w, h) {
+    const cv = document.createElement('canvas'); cv.width = SPINE_IMG[0]; cv.height = SPINE_IMG[1]; const x = cv.getContext('2d');
+    const sc = Math.min(cv.width / w, cv.height / h), dw = Math.max(1, Math.round(w * sc)), dh = Math.max(1, Math.round(h * sc)), ox = Math.round((cv.width - dw) / 2), oy = Math.round((cv.height - dh) / 2);
+    if (oy > 0) { x.drawImage(src, 0, 0, w, 1, 0, 0, cv.width, oy + 1); x.drawImage(src, 0, h - 1, w, 1, 0, oy + dh - 1, cv.width, cv.height - oy - dh + 1); }
+    if (ox > 0) { x.drawImage(src, 0, 0, 1, h, 0, oy, ox + 1, dh); x.drawImage(src, w - 1, 0, 1, h, ox + dw - 1, oy, cv.width - ox - dw + 1, dh); }
+    x.drawImage(src, 0, 0, w, h, ox, oy, dw, dh);
+    return cv;
+  }
+  /* Anciennes tranches (avant 1.2) : remises à la taille standard une seule fois */
+  function normSpines() {
+    const todo = []; DB.consoles.forEach((c) => c.games.forEach((g) => { if (g.tranche && !g.trancheV) todo.push(g); }));
+    if (!todo.length || READONLY) return;
+    let left = todo.length;
+    todo.forEach((g) => {
+      const img = new Image();
+      const end = () => { if (--left === 0) { save(); if (route()[0] === 'console') refresh(); } };
+      img.onload = () => { try { let src = img; if (img.width > img.height * 1.2) { const r = document.createElement('canvas'); r.width = img.height; r.height = img.width; const rx = r.getContext('2d'); rx.translate(r.width, 0); rx.rotate(Math.PI / 2); rx.drawImage(img, 0, 0); src = r; } g.tranche = encodeCanvas(fitSpine(src, src.width, src.height)); g.trancheV = 1; } catch (e) { g.trancheV = 1; } end(); };
+      img.onerror = () => { g.trancheV = 1; end(); };
+      img.src = g.tranche;
+    });
+  }
   /* Vue « Tranches » : les jeux vus de dos, rangés sur une étagère. La couleur de chaque tranche vient de la jaquette. */
   const strHash = (t) => { let h = 0; String(t).split('').forEach((ch) => { h = (h * 31 + ch.charCodeAt(0)) | 0; }); return Math.abs(h); };
   function spineHtml(c, g) {
-    const hh = strHash(g.id + (g.nom || '')), w = 30 + (hh % 9), ht = 196 + ((hh >> 3) % 22);
-    if (g.tranche) return '<div class="sp-cell"><a class="spine has-img' + rowClass(g) + '" href="#/game/' + c.id + '/' + g.id + '" title="' + esc(g.nom || 'Sans titre') + '" style="width:' + (28 + hh % 5) + 'px;height:' + ht + 'px;background-image:url(' + esc(g.tranche) + ')"></a></div>';
+    const hh = strHash(g.id + (g.nom || '')), w = SPINE_BOX[0], ht = SPINE_BOX[1];
+    if (g.tranche) return '<div class="sp-cell"><a class="spine has-img' + rowClass(g) + '" href="#/game/' + c.id + '/' + g.id + '" title="' + esc(g.nom || 'Sans titre') + '" style="width:' + w + 'px;height:' + ht + 'px;background-image:url(' + esc(g.tranche) + ')"></a></div>';
     return '<div class="sp-cell"><a class="spine' + rowClass(g) + '" href="#/game/' + c.id + '/' + g.id + '" title="' + esc(g.nom || 'Sans titre') + '" data-gid="' + g.id + '" data-src="' + esc(g.image || '') + '" style="width:' + w + 'px;height:' + ht + 'px;--sp:hsl(' + (hh % 360) + ',34%,30%)">' +
       '<span class="sp-top" style="background:' + brandColor(c.marque) + '"></span><span class="sp-title">' + esc(g.nom || 'Sans titre') + '</span><span class="sp-ico">' + (g.platine ? '🏆' : g.special ? '⭐' : '') + '</span></a></div>';
   }
@@ -581,13 +610,13 @@
     const list = filteredGames(c), dm = tabOf(c) === 'demat';
     const q = list.reduce((s, g) => s + (Number(g.quantite) || 1), 0);
     const v = list.reduce((s, g) => s + (Number(g.prixEstime) || 0) * (Number(g.quantite) || 1), 0);
-    let h = '<p class="muted">' + list.length + ' lignes · ' + q + ' exemplaires' + (HIDE_PRICE ? '' : ' · valeur estimée ' + eur(v)) + '</p>';
+    let h = '';
     if (!list.length) { $('#results').innerHTML = h + '<div class="card">Aucun jeu ne correspond.</div>'; S.curKeys = []; paintBulk(); return; }
 
     if (S.mode === 'spine') {
       h += '<div class="shelf">' + list.map((g) => spineHtml(c, g)).join('') + '</div>';
     } else if (S.mode === 'wall') {
-      h += '<div class="wall">' + list.map((g) => '<a class="vit' + rowClass(g) + '" href="#/game/' + c.id + '/' + g.id + '" title="' + esc(g.nom || '') + '">' +
+      h += '<div class="wall">' + list.map((g) => '<a class="vit' + rowClass(g) + '" href="#/game/' + c.id + '/' + g.id + '" data-act="view-game" data-c="' + c.id + '" data-id="' + g.id + '" title="' + esc(g.nom || '') + '">' +
         (g.image ? '<img src="' + esc(g.image) + '" alt="' + esc(g.nom) + '">' : '<span class="vph">' + (g.nom ? esc(g.nom) : '🎮') + '</span>') +
         '<span class="vcap"><b>' + esc(g.nom || 'Sans titre') + '</b>' + (HIDE_PRICE ? '' : '<small>' + eur(g.prixEstime) + '</small>') + '</span></a>').join('') + '</div>';
     } else if (S.mode === 'cards') {
@@ -711,12 +740,14 @@
   function resizeImage(file, cb, spine) {
     const img = new Image();
     img.onload = () => {
-      const k = Math.min(1, (spine ? 640 : 380) / Math.max(img.width, img.height));
-      const cv = document.createElement('canvas');
-      if (spine && img.width > img.height * 1.2) { /* tranche photographiée à l'horizontale : on la redresse */
-        cv.width = Math.round(img.height * k); cv.height = Math.round(img.width * k);
-        const x = cv.getContext('2d'); x.translate(cv.width, 0); x.rotate(Math.PI / 2); x.drawImage(img, 0, 0, cv.height, cv.width);
-      } else { cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k); cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height); }
+      if (spine) { /* tranche : redressée si horizontale, puis mise à la taille standard */
+        let src = img;
+        if (img.width > img.height * 1.2) { const r = document.createElement('canvas'); r.width = img.height; r.height = img.width; const rx = r.getContext('2d'); rx.translate(r.width, 0); rx.rotate(Math.PI / 2); rx.drawImage(img, 0, 0); src = r; }
+        cb(encodeCanvas(fitSpine(src, src.width, src.height))); return;
+      }
+      const k = Math.min(1, 380 / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
       cb(encodeCanvas(cv));
     };
     img.src = URL.createObjectURL(file);
@@ -731,7 +762,7 @@
       const hidden = (f.showIf && !values[f.showIf]) || (f.hideIf && values[f.hideIf]) ? ' hidden' : '';
       h += '<div class="field' + (f.wide ? ' wide' : '') + (f.type === 'check' ? ' checkfield' : '') + '"' + (f.showIf ? ' data-if="' + f.showIf + '"' : '') + (f.hideIf ? ' data-hideif="' + f.hideIf + '"' : '') + ' style="' + (hidden ? 'display:none' : '') + '">';
       if (f.type === 'check') {
-        h += '<label class="chk"><input type="checkbox" name="' + f.k + '"' + (v ? ' checked' : '') + '> ' + esc(f.label) + '</label>';
+        h += '<label>' + esc(f.label) + '</label><label class="chk"><input type="checkbox" name="' + f.k + '"' + (v ? ' checked' : '') + '> Oui</label>';
       } else {
         h += '<label>' + esc(f.label) + '</label>';
         if (f.type === 'image') {
@@ -748,7 +779,7 @@
         } else if (f.type === 'textarea') h += '<textarea name="' + f.k + '">' + esc(v) + '</textarea>';
         else if (f.type === 'select') h += '<select name="' + f.k + '">' + f.opts.map((o, j) => '<option' + (f.names ? ' value="' + esc(o) + '"' : '') + (o === v ? ' selected' : '') + '>' + esc(f.names ? f.names[j] : o) + '</option>').join('') + '</select>';
         else {
-          h += '<input name="' + f.k + '" type="' + (f.type || 'text') + '" ' + (f.type === 'number' ? 'step="any" ' : '') + (f.list ? 'list="dl' + i + '" ' : '') + 'value="' + esc(v) + '">';
+          h += '<input name="' + f.k + '" type="' + (f.type || 'text') + '" ' + (f.ph ? 'placeholder="' + esc(f.ph) + '" ' : '') + (f.type === 'number' ? 'step="any" ' : '') + (f.list ? 'list="dl' + i + '" ' : '') + 'value="' + esc(v) + '">';
           if (f.list) lists[i] = f.list;
         }
       }
@@ -760,7 +791,8 @@
 
     $('#modalTitle').textContent = title;
     $('.modal-box').classList.remove('wide');
-    const form = $('#modalForm'); form.innerHTML = h;
+    const form = $('#modalForm'); form.innerHTML = h; FORM_OPEN = true; FORM_DIRTY = false;
+    form.addEventListener('input', () => { FORM_DIRTY = true; }); form.addEventListener('change', () => { FORM_DIRTY = true; });
 
     /* Cases à cocher qui affichent d'autres champs (ex. édition spéciale) */
     form.querySelectorAll('input[type=checkbox]').forEach((cb) => {
@@ -803,13 +835,19 @@
     $('#cancelForm').onclick = closeModal;
     $('#modal').classList.remove('hidden');
   }
-  function closeModal() { $('#modal').classList.add('hidden'); $('#modalForm').innerHTML = ''; $('.modal-box').classList.remove('wide'); }
+  let FORM_OPEN = false, FORM_DIRTY = false;
+  function closeModal() { FORM_OPEN = false; FORM_DIRTY = false; $('#modal').classList.add('hidden'); $('#modalForm').innerHTML = ''; $('.modal-box').classList.remove('wide'); }
+  /* Fermeture « douce » (clic à côté, Échap, croix) : un formulaire modifié demande confirmation, un clic à côté ne le ferme jamais */
+  function softClose(outside) {
+    if (FORM_OPEN) { if (outside) return; if (FORM_DIRTY && !confirm('Fermer sans enregistrer ? Ce que tu as saisi sera perdu.')) return; }
+    closeModal();
+  }
 
   /* Jeu lié : ex. version Switch 2 (gratuite avec Nintendo Switch Online) débloquée grâce à la cartouche Switch 1 */
   function linkField(c) {
     const o = [''], n = ['— Aucun —'];
     DB.consoles.forEach((k) => { if (k.id === c.id) return; k.games.filter((x) => x.nom).slice().sort((a, b) => a.nom.localeCompare(b.nom, 'fr')).forEach((x) => { o.push(k.id + '|' + x.id); n.push(x.nom + ' (' + k.nom + ')'); }); });
-    return { k: 'lien', label: '🔗 Débloqué grâce à un autre jeu (ex. cartouche Switch 1 pour une mise à niveau Switch 2) – le jeu passe alors en dématérialisé', type: 'select', opts: o, names: n, wide: true };
+    return { k: 'lien', label: '🔗 Débloqué grâce à un autre jeu', type: 'select', opts: o, names: n, wide: true };
   }
   const linkTarget = (g) => { if (!g.lien) return null; const [cid, gid] = g.lien.split('|'), c = consoleById(cid), x = c && c.games.find((y) => y.id === gid); return x ? { c, g: x } : null; };
   function linkedFrom(g) {
@@ -820,9 +858,9 @@
   function gameFields(c) {
     const f = [
       { k: 'nom', label: 'Nom du jeu', wide: true },
-      { k: 'demat', label: '☁️ Jeu dématérialisé (aucun support physique)', type: 'check' },
+      { k: 'demat', label: '☁️ Jeu dématérialisé', type: 'check' },
     ];
-    if (isSwitch2(c)) f.push({ k: 'gamekey', label: '🔑 Game-Key Card (la cartouche ne contient que la clé de téléchargement)', type: 'check', hideIf: 'demat' });
+    if (isSwitch2(c)) f.push({ k: 'gamekey', label: '🔑 Game-Key Card', type: 'check', hideIf: 'demat' });
     return f.concat([
       { k: 'licence', label: 'Licence / série', type: 'choice', opt: 'licences' },
       { k: 'version', label: 'Version', type: 'choice', opt: 'versions' },
@@ -830,20 +868,21 @@
       { k: 'boite', label: 'Boîte', type: 'choice', opt: 'etats', hideIf: 'demat' },
       { k: 'notice', label: 'Notice', type: 'choice', opt: 'etats', hideIf: 'demat' },
       { k: 'qualite', label: 'Qualité globale', type: 'choice', opt: 'etats', hideIf: 'demat' },
-      linkField(c),
+      ...(isSwitch2(c) || isPS5(c) ? [linkField(c)] : []),
+      { k: 'exemplaire', label: 'Exemplaire', ph: 'ex. Exemplaire 2 (si tu en as plusieurs)' },
       { k: 'quantite', label: 'Quantité', type: 'number' },
       { k: 'prixEstime', label: 'Prix estimé (€)', type: 'number' },
-      { k: 'achat', label: 'Prix d\'achat - Magasin (ex. 25€ - Cash Express)' },
+      { k: 'achat', label: 'Prix d\'achat - Magasin', ph: 'ex. 25€ - Cash Express' },
       { k: 'anneeSortie', label: 'Année de sortie' }, { k: 'anneeAchat', label: 'Année d\'achat' },
       { k: 'test', label: 'Test', list: ['Jeu Fonctionnel', 'A tester'] },
       { k: 'desc100', label: 'Objectif / avancement 100 %', list: ['Un jour je le ferais à 100%', 'Pas prévu de 100%'] },
-      { k: 'platine', label: '🏆 Terminé à 100 % (platine)', type: 'check' },
-      { k: 'special', label: '⭐ Édition spéciale / collector', type: 'check' },
-      { k: 'editionNote', label: 'Détail de l\'édition (ex. Steelbook, Day One…)', showIf: 'special', wide: true },
-      { k: 'imageEdition', label: 'Photo de l\'édition spéciale / collector', type: 'image', showIf: 'special', wide: true },
+      { k: 'platine', label: '🏆 Terminé à 100 %', type: 'check' },
+      { k: 'special', label: '⭐ Édition spéciale', type: 'check' },
+      { k: 'editionNote', label: 'Détail de l\'édition', ph: 'ex. Steelbook, Day One…', showIf: 'special', wide: true },
+      { k: 'imageEdition', label: 'Photo de l\'édition spéciale', type: 'image', showIf: 'special', wide: true },
       { k: 'notes', label: 'Notes - Histoire', type: 'textarea', wide: true },
-      { k: 'image', label: 'Jaquette (photo ou capture, optionnel)', type: 'image', wide: true },
-      { k: 'tranche', label: 'Tranche du jeu (photo de la tranche, optionnel – affichée dans la vue Tranches)', type: 'image', wide: true },
+      { k: 'image', label: 'Jaquette', type: 'image', wide: true },
+      { k: 'tranche', label: 'Tranche du jeu', type: 'image', wide: true },
     ]);
   }
 
@@ -860,6 +899,7 @@
       v.prixAchat = parseEuro(v.achat);
       if (v.licence && DB.options.licences.indexOf(v.licence) < 0) DB.options.licences.push(v.licence);
       if (v.prixEstime != null && (isNew || Number(v.prixEstime) !== Number(g.prixEstime))) v.prixDate = Date.now();
+      if (v.tranche && v.tranche !== g.tranche) v.trancheV = 1;
       if (isNew) { v.id = uid(); v.groupe = 0; v.section = 'Principal'; v.ajoute = Date.now(); c.games.push(v); } else Object.assign(g, v);
       save(); renderNav(); refresh(); toast('Jeu enregistré');
       if (done) done();
@@ -885,6 +925,9 @@
     if (tg) lk += '<div class="dsec linkbox"><h4>🔗 Débloqué grâce à</h4><p style="margin:0">' + lnk(tg) + '<br><span class="muted">Il faut garder ce jeu (cartouche ou disque) pour accéder à cette version.</span></p></div>';
     if (fr.length) lk += '<div class="dsec linkbox"><h4>🔗 Donne accès à</h4><p style="margin:0">' + fr.map(lnk).join('<br>') + '</p></div>';
     const info = [['Année de sortie', g.anneeSortie], ['Année d\'achat', g.anneeAchat], ['Version', g.version], ['Licence', g.licence], ['Test', g.test], ['Objectif / avancement 100 %', g.desc100]].filter((r) => r[1]);
+    const own = DB.consoles.find((k) => k.games.indexOf(g) >= 0), ek = editionInfo(g).key;
+    const cps = own ? own.games.filter((x) => x !== g && x.nom && editionInfo(x).key === ek) : [];
+    if (cps.length) lk += '<div class="dsec linkbox"><h4>Autres exemplaires</h4><p style="margin:0">' + cps.map((x) => '<a href="#/game/' + own.id + '/' + x.id + '">' + esc(x.exemplaire || x.version || 'Exemplaire') + '</a> <span class="muted">· ' + esc(statut(x)) + (x.qualite ? ' · ' + esc(x.qualite) : '') + '</span>').join('<br>') + '</p></div>';
     let h = lk;
     if (info.length) h += '<div class="dsec"><h4>Informations</h4><dl class="dgrid">' + info.map((r) => '<div><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>').join('') + '</dl></div>';
     if (g.special) h += '<div class="dsec goldbox"><h4>⭐ Édition spéciale / collector</h4><div class="dedition">' + (g.imageEdition ? zoomImg(g.imageEdition, 'eimg') : '') + '<p>' + esc(g.editionNote || 'Pas de détail renseigné.') + '</p></div></div>';
@@ -899,7 +942,8 @@
       '<h2 class="dtitle">' + gameTitle(g) + '</h2><p class="dsub">' + [c.nom, g.licence, g.version, g.anneeSortie].filter(Boolean).map(esc).join(' · ') + '</p>' +
       '<div class="dsubsec"><h4>État de l\'exemplaire</h4>' + gStates(c, g) + '</div></div></div>' + gValue(c, g) + gMore(g) +
       '<div class="form-actions"><button type="button" class="btn danger" data-act="del-game" data-c="' + cid + '" data-id="' + gid + '">Supprimer</button>' +
-      '<a class="btn" href="#/game/' + cid + '/' + gid + '" data-act="open-vitrine">🖼 Vitrine</a>' +
+      (READONLY ? '' : '<button type="button" class="btn" data-act="add-copy" data-c="' + cid + '" data-id="' + gid + '">➕ Autre exemplaire</button>') +
+      '<a class="btn" href="#/game/' + cid + '/' + gid + '" data-act="open-vitrine">🔍 Agrandissement</a>' +
       '<button type="button" class="btn primary" data-act="edit-game" data-c="' + cid + '" data-id="' + gid + '">Modifier</button></div>';
     showModal('', h, true);
   }
@@ -921,7 +965,7 @@
 
   function showModal(title, html, wide) {
     $('#modalTitle').textContent = title;
-    $('.modal-box').classList.toggle('wide', !!wide);
+    FORM_OPEN = false; FORM_DIRTY = false; $('.modal-box').classList.toggle('wide', !!wide);
     $('#modalForm').onsubmit = (e) => e.preventDefault();
     $('#modalForm').innerHTML = html;
     $('#modal').classList.remove('hidden');
@@ -970,12 +1014,12 @@
   function editConsole(cid) {
     const c = cid ? consoleById(cid) : null;
     openForm(c ? 'Modifier la console' : 'Nouvelle console', [
-      { k: 'nom', label: 'Nom (ex. PlayStation 3)', wide: true },
+      { k: 'nom', label: 'Nom', ph: 'ex. PlayStation 3', wide: true },
       { k: 'marque', label: 'Marque', type: 'choice', opt: 'marques' }, { k: 'support', label: 'Support des jeux', type: 'choice', opt: 'supports' },
       { k: 'type', label: 'Type de console', type: 'select', opts: ['salon', 'portable'], names: ['Console de salon', 'Console portable'] },
-      { k: 'annee', label: 'Année de sortie (laisse vide : je la devine)', type: 'number' },
-      { k: 'logoBgMode', label: 'Fond du logo', type: 'select', opts: ['', 'white', 'black', 'mono'], names: ['Comme le réglage général', 'Blanc', 'Noir (couleur du fond du site)', 'Monochrome (blanc en sombre, noir en clair)'] },
-      { k: 'logo', label: 'Logo de la console (optionnel)', type: 'image', wide: true }], c || { support: 'Cartouche', type: 'salon', logoBgMode: '' }, (v) => {
+      { k: 'annee', label: 'Année de sortie', ph: 'Vide : je la devine', type: 'number' },
+      { k: 'logoBgMode', label: 'Fond du logo', type: 'select', opts: ['', 'auto', 'white', 'black', 'mono'], names: ['Comme le réglage général', 'Automatique (suit jour / nuit)', 'Blanc', 'Noir', 'Monochrome'] },
+      { k: 'logo', label: 'Logo de la console', type: 'image', wide: true }], c || { support: 'Cartouche', type: 'salon', logoBgMode: '' }, (v) => {
       v.nom = v.nom || 'Nouvelle console'; v.marque = v.marque || 'Autres'; v.support = v.support || 'Cartouche';
       const gm = guessMeta(v.nom);
       if (v.annee === '' || v.annee == null) { v.annee = gm.annee; if (!c) v.type = gm.type; }
@@ -1042,16 +1086,27 @@
 
     const top = rows.filter((x) => x.g.prixEstime).sort((a, b) => b.g.prixEstime - a.g.prixEstime).slice(0, 8);
     const card = (t, body) => '<div class="card"><h3>' + t + '</h3>' + body + '</div>';
+    const items = [
+      ['marques', card('Jeux par marque', hbars(brands, null) + (HIDE_PRICE ? '' : '<p class="muted" style="margin:10px 0 0">Valeur estimée : ' + brands.map((b) => b.l + ' <b>' + eur(b.val) + '</b>').join(' · ') + '</p>'))],
+      ['etat', card('État de la collection', donut)],
+      ['console', card('Jeux par console', hbars(perConsole, null))],
+      ['valeur', card('Valeur estimée par console', hbars(perValue, eur))],
+      ['qualite', card('Qualité globale', hbars(qual, null))],
+      ['top', HIDE_PRICE ? '' : card('Les jeux les plus chers', '<ol class="toplist">' + top.map((x) => '<li><span>' + esc(x.g.nom || 'Sans titre') + ' <small class="muted">' + esc(x.c.nom) + '</small></span><b>' + eur(x.g.prixEstime) + '</b></li>').join('') + '</ol>')],
+      ['hist', histChart()],
+      ['annees', card('Évolution : jeux achetés par année', ys.length ? '<div class="vchart">' + cols + '</div><p class="muted" style="margin:6px 0 0">Σ = total cumulé.' + (unknown ? ' ' + unknown + ' jeux sans année d\'achat ne sont pas comptés.' : '') + '</p>' : '<p class="muted">Renseigne l\'« Année d\'achat » de tes jeux pour voir ce graphique.</p>')],
+    ].filter((x) => x[1]);
+    const edit = !!S.statsEdit && !READONLY, hid = DB.statsHidden || [];
+    const order = (DB.statsOrder || []).filter((id) => items.some((x) => x[0] === id));
+    items.forEach((x) => { if (order.indexOf(x[0]) < 0) order.push(x[0]); });
+    const body = order.filter((id) => edit || hid.indexOf(id) < 0).map((id) => {
+      const html = items.find((x) => x[0] === id)[1], off = hid.indexOf(id) >= 0;
+      const ctl = edit ? '<div class="sctl"><button class="btn small" data-act="stat-up" data-id="' + id + '" title="Monter">↑</button><button class="btn small" data-act="stat-down" data-id="' + id + '" title="Descendre">↓</button><button class="btn small" data-act="stat-hide" data-id="' + id + '">' + (off ? '👁 Afficher' : '🚫 Masquer') + '</button></div>' : '';
+      return html.replace('<div class="card"><h3>', '<div class="card' + (id === 'hist' || id === 'annees' ? ' wide' : '') + (off ? ' dim' : '') + '" data-sid="' + id + '"><h3>').replace('</h3>', '</h3>' + ctl);
+    }).join('');
     return '<h2 class="page">Statistiques</h2><p class="sub">' + sum(rows, (x) => x.q) + ' jeux · ' + DB.consoles.length + ' consoles' + (HIDE_PRICE ? '' : ' · valeur estimée ' + eur(sum(rows, (x) => (Number(x.g.prixEstime) || 0) * x.q))) + '</p>' +
-      '<div class="grid statgrid">' +
-      card('Jeux par marque', hbars(brands, null) + (HIDE_PRICE ? '' : '<p class="muted" style="margin:10px 0 0">Valeur estimée : ' + brands.map((b) => b.l + ' <b>' + eur(b.val) + '</b>').join(' · ') + '</p>')) +
-      card('État de la collection', donut) +
-      card('Jeux par console', hbars(perConsole, null)) +
-      card('Valeur estimée par console', hbars(perValue, eur)) +
-      card('Qualité globale', hbars(qual, null)) +
-      (HIDE_PRICE ? '' : card('Les jeux les plus chers', '<ol class="toplist">' + top.map((x) => '<li><span>' + esc(x.g.nom || 'Sans titre') + ' <small class="muted">' + esc(x.c.nom) + '</small></span><b>' + eur(x.g.prixEstime) + '</b></li>').join('') + '</ol>')) +
-      '</div>' +
-      histChart() + card('Évolution : jeux achetés par année', ys.length ? '<div class="vchart">' + cols + '</div><p class="muted" style="margin:6px 0 0">Σ = total cumulé.' + (unknown ? ' ' + unknown + ' jeux sans année d\'achat ne sont pas comptés.' : '') + '</p>' : '<p class="muted">Renseigne l\'« Année d\'achat » de tes jeux pour voir ce graphique.</p>');
+      (READONLY ? '' : '<div class="toolbar"><span class="spacer"></span>' + (edit ? '<button class="btn" data-act="stat-reset">Réinitialiser</button><button class="btn primary" data-act="stat-edit">✔ Terminé</button>' : '<button class="btn" data-act="stat-edit">✏️ Personnaliser</button>') + '</div>') +
+      '<div class="grid statgrid">' + body + '</div>';
   }
 
   /* ---------- 9c. Impression (brocante) ---------- */
@@ -1435,6 +1490,7 @@
     lastSer = null; save();
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* ignore */ }
     router();
+    setTimeout(normSpines, 1200);
     setTimeout(checkCloud, 900);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) checkCloud(); });
     if (migratedFromLS) toast('Stockage amélioré : tes données ont été copiées dans un espace bien plus grand ✔');
@@ -1460,8 +1516,8 @@
       '<p class="muted" style="margin:0 0 10px">' + (auto ? 'Dans chaque marque : les consoles de salon par date de sortie, puis les portables par date de sortie. Une nouvelle console se place toute seule au bon endroit (renseigne son type et son année).'
         : 'Tu déplaces toi-même chaque console avec les flèches. Une nouvelle console est ajoutée en dernier de sa marque.') + ' Les marques se déplacent dans les deux modes.</p>' +
       '<div class="olist">' + rows + '</div></div>' +
-      '<div class="card"><h3>Fond des logos de consoles</h3><div class="toolbar" style="margin-top:0"><div class="seg"><button data-act="logostyle" data-m="white" class="' + (DB.logoStyle === 'white' ? 'on' : '') + '">Blanc</button><button data-act="logostyle" data-m="black" class="' + (DB.logoStyle === 'black' ? 'on' : '') + '">Noir</button><button data-act="logostyle" data-m="mono" class="' + (DB.logoStyle === 'mono' ? 'on' : '') + '">Monochrome</button></div></div>' +
-      '<p class="muted" style="margin:0 0 6px">« Monochrome » : les logos passent en blanc sur fond sombre et en noir sur fond clair, sans fond. Les logos en couleur (ex. GameCube) sont convertis en silhouette ; si le résultat ne te plaît pas, choisis un fond Blanc ou Noir pour cette console. Il ne s\'applique qu\'aux logos à fond transparent ; les autres gardent un fond blanc.</p><p class="muted" style="margin:0">Le « noir » est la couleur du fond du site. Si un logo est illisible sur ce fond, choisis le fond de cette console à part (✏️ Modifier la console).</p></div>';
+      '<div class="card"><h3>Fond des logos de consoles</h3><div class="toolbar" style="margin-top:0"><div class="seg"><button data-act="logostyle" data-m="auto" class="' + (DB.logoStyle === 'auto' ? 'on' : '') + '">Automatique</button><button data-act="logostyle" data-m="white" class="' + (DB.logoStyle === 'white' ? 'on' : '') + '">Blanc</button><button data-act="logostyle" data-m="black" class="' + (DB.logoStyle === 'black' ? 'on' : '') + '">Noir</button><button data-act="logostyle" data-m="mono" class="' + (DB.logoStyle === 'mono' ? 'on' : '') + '">Monochrome</button></div></div>' +
+      '<p class="muted" style="margin:0 0 6px">« Automatique » : le fond des logos est blanc le jour et sombre la nuit, et le logo s\'inverse au besoin (un logo à fond plein garde son fond blanc). « Monochrome » : les logos passent en blanc sur fond sombre et en noir sur fond clair, sans fond. Les logos en couleur (ex. GameCube) sont convertis en silhouette ; si le résultat ne te plaît pas, choisis un fond Blanc ou Noir pour cette console. Il ne s\'applique qu\'aux logos à fond transparent ; les autres gardent un fond blanc.</p><p class="muted" style="margin:0">Le « noir » est la couleur du fond du site. Si un logo est illisible sur ce fond, choisis le fond de cette console à part (✏️ Modifier la console).</p></div>';
   }
   function moveBrand(b, d) {
     const l = brandList(), i = l.indexOf(b), j = i + d; if (j < 0 || j >= l.length) return;
@@ -1683,6 +1739,7 @@
   function aboutView() {
     const g = (t, body) => '<details class="guide"><summary>' + t + '</summary>' + body + '</details>';
     const log = [
+      ['1.2', 'Exemplaires multiples avec états différents · fenêtre d\'ajout protégée contre les clics accidentels · tranches de taille uniforme · logos qui suivent le mode jour / nuit · Vitrine ouvre la fiche + bouton Agrandissement · statistiques réordonnables · formulaires harmonisés'],
       ['1.1', 'Tranches réelles des jeux · éditions (Choix des joueurs, Platinum…) détectées comme doublons avec fusion · jeux liés (version Switch 2 débloquée par la cartouche Switch 1) · logos Monochrome pour toutes les consoles · tri par date de sortie · colonne des cases resserrée · couleur Nintendo uniforme'],
       ['1.0', 'Annuler une suppression ou une opération groupée · vérification de la dernière version à chaque ouverture · page À propos · vue « Tous les jeux » · complétion par licence · modification en lot · historique des prix · partage d\'une seule wishlist'],
       ['0.9', 'Vue Tranches · wishlists modifiables avec Vitrine · compléter les titres · alerte doublons · frise déplaçable · bandeau « version plus récente » · version précédente dans le cloud · Brocante pour les amis · filtres en liste · Paramètres repliables'],
@@ -1784,7 +1841,7 @@
     const out = [];
     DB.consoles.forEach((c) => {
       const m = {};
-      c.games.forEach((g) => { if (!g.nom) return; const e = editionInfo(g), k = e.key + '|' + (isDemat(g) ? 'd' : 'p'); (m[k] = m[k] || []).push({ g, label: e.label, ex: plain(g.nom + '|' + (g.version || '')).replace(/[^a-z0-9|]+/g, '') }); });
+      c.games.forEach((g) => { if (!g.nom) return; const e = editionInfo(g), k = e.key + '|' + (isDemat(g) ? 'd' : 'p') + '|' + plain(g.exemplaire || ''); (m[k] = m[k] || []).push({ g, label: e.label, ex: plain(g.nom + '|' + (g.version || '')).replace(/[^a-z0-9|]+/g, '') }); });
       Object.keys(m).forEach((k) => { if (m[k].length > 1) { const l = m[k].map((x) => x.g), labels = m[k].map((x) => x.label); out.push({ c, l, labels, same: m[k].every((x) => x.ex === m[k][0].ex) }); } });
     });
     return out;
@@ -1859,6 +1916,14 @@
       case 'del-legacy': try { localStorage.removeItem(KEY); } catch (err) { /* ignore */ } router(); toast('Ancienne copie supprimée'); break;
       case 'reset': if (confirm('Effacer toutes tes modifications et revenir aux données de départ ?')) { snap('Retour aux données de départ'); try { localStorage.removeItem(KEY); } catch (err) { /* ignore */ } DB = clone(INITIAL_DATA); normalize(DB); lastSer = null; save(); router(); toast('Données réinitialisées', true); } break;
       case 'undo': undo(); break;
+      case 'stat-edit': S.statsEdit = !S.statsEdit; { const y = window.scrollY; router(); window.scrollTo(0, y); } break;
+      case 'stat-reset': delete DB.statsOrder; delete DB.statsHidden; save(); { const y = window.scrollY; router(); window.scrollTo(0, y); } break;
+      case 'stat-hide': { const h = (DB.statsHidden || []).slice(), i = h.indexOf(d.id); if (i >= 0) h.splice(i, 1); else h.push(d.id); DB.statsHidden = h; save(); const y = window.scrollY; router(); window.scrollTo(0, y); break; }
+      case 'stat-up': case 'stat-down': {
+        const ids = [...document.querySelectorAll('[data-sid]')].map((x) => x.dataset.sid), i = ids.indexOf(d.id), j = d.act === 'stat-up' ? i - 1 : i + 1;
+        if (i < 0 || j < 0 || j >= ids.length) break;
+        [ids[i], ids[j]] = [ids[j], ids[i]]; DB.statsOrder = ids; save(); const y = window.scrollY; router(); window.scrollTo(0, y); break;
+      }
       case 'merge-dup': { const c = consoleById(d.c), gs = d.ids.split(',').map((i) => c && c.games.find((x) => x.id === i)).filter(Boolean); if (gs.length < 2) break; snap('Fusion de ' + gs.length + ' lignes « ' + (gs[0].nom || '') + ' »'); gs[0].quantite = gs.reduce((a, x) => a + (Number(x.quantite) || 1), 0); gs.slice(1).forEach((x) => c.games.splice(c.games.indexOf(x), 1)); save(); renderNav(); router(); toast('Lignes fusionnées', true); break; }
       case 'all-tab': S.all.tab = d.t; renderAll(); break;
       case 'all-lic': S.all = Object.assign({}, S.all, { q: '', cons: '', statut: '', flag: '', licence: d.l, tab: 'jeux' }); S.allLimit = 200; renderAll(); break;
@@ -1893,6 +1958,14 @@
       case 'optimize': optimizeImages(); break;
       case 'fresh': if (confirm('Marquer toutes les estimations comme mises à jour aujourd\'hui ?')) { DB.consoles.forEach((c) => c.games.forEach((g) => { if (g.prixEstime != null) g.prixDate = Date.now(); })); save(); router(); toast('Estimations marquées à jour'); } break;
       case 'open-vitrine': closeModal(); break;
+      case 'add-copy': {
+        const c = consoleById(d.c), src = c && c.games.find((x) => x.id === d.id); if (!src) break;
+        const pre = {}; ['nom', 'licence', 'version', 'anneeSortie', 'prixEstime', 'support', 'boite', 'notice', 'qualite', 'special', 'editionNote', 'imageEdition', 'image', 'tranche', 'gamekey', 'lien'].forEach((k) => { if (src[k] != null && src[k] !== '') pre[k] = src[k]; });
+        const n = (c.games.filter((x) => editionInfo(x).key === editionInfo(src).key).length || 1) + 1;
+        pre.quantite = 1; pre.exemplaire = 'Exemplaire ' + n; pre.demat = isDemat(src);
+        closeModal(); editGame(d.c, null, pre, () => { if (!src.exemplaire) { src.exemplaire = 'Exemplaire 1'; save(); refresh(); } });
+        break;
+      }
       case 'vswap': { const m = $('#vmain'); if (m) { m.src = d.src; m.dataset.src = d.src; } document.querySelectorAll('.vthumbs button').forEach((b) => b.classList.toggle('on', b === t)); break; }
       case 'sync-push': cloudPush(); break;
       case 'share-publish': sharePublish(); break;
@@ -1970,10 +2043,10 @@
       r.readAsText(t.files[0]);
     }
   });
-  $('#modalClose').onclick = closeModal;
-  $('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') closeModal(); });
+  $('#modalClose').onclick = () => softClose(false);
+  $('#modal').addEventListener('mousedown', (e) => { if (e.target.id === 'modal') softClose(true); });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Escape') softClose(false);
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z') && UNDO && !READONLY && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '')) { e.preventDefault(); undo(); }
     if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('tinput')) {
       e.preventDefault();

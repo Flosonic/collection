@@ -698,3 +698,19 @@ td.chk input,th.chk input{margin:0;width:15px;height:15px;vertical-align:middle}
 .spine.has-img{background-size:100% 100%;background-repeat:no-repeat;background-position:center;background-color:#222}
 .dsec.linkbox{border-color:var(--accent)}
 .dsec.linkbox a{color:var(--accent);font-weight:600}
+
+/* ===== V1.2 ===== */
+table td.chk,table th.chk{vertical-align:middle}
+.field label.chk{padding:8px 10px;font:inherit;line-height:1.35;gap:8px}
+.chk input{width:16px;height:16px;margin:0}
+.notice.nrow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pill.exp{background:#26324f;color:#9db8ff}
+.logo.lauto,.tlogo.lauto{background:var(--bg)}
+html[data-theme=light] .logo.lauto,html[data-theme=light] .tlogo.lauto{background:#fff}
+.logo.lauto.dtone img,.tlogo.lauto.dtone img{filter:invert(1) hue-rotate(180deg)}
+html[data-theme=light] .logo.lauto.dtone img,html[data-theme=light] .tlogo.lauto.dtone img{filter:none}
+.logo.lauto.ltone img,.tlogo.lauto.ltone img{filter:none}
+html[data-theme=light] .logo.lauto.ltone img,html[data-theme=light] .tlogo.lauto.ltone img{filter:invert(1) hue-rotate(180deg)}
+.statgrid .card.wide{grid-column:1/-1}
+.statgrid .card.dim{opacity:.45}
+.sctl{display:flex;gap:6px;margin:-4px 0 10px}
